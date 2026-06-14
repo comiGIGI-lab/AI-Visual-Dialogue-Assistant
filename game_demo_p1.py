@@ -260,11 +260,52 @@ def filter_depth_outliers(depth_values, threshold=0.2):
 
 # 中文字体（OpenCV putText 不支持中文，需用 PIL）
 _FONT_CACHE = {}
+
+# ── 动作内部名 → 中文显示名 ───────────────────────────────
+ACTION_DISPLAY_NAMES = {
+    "NECK_LEFT":        "颈部左转",
+    "NECK_RIGHT":       "颈部右转",
+    "RAISING_BOTH_HANDS": "双手上举",
+    "RAISING_LEFT_HAND":  "左手上举",
+    "RAISING_RIGHT_HAND": "右手上举",
+    "CHEST_OPEN":       "扩胸打开",
+    "CHEST_CLOSE":      "双手合拢",
+    "LEFT_STRETCH":     "左侧拉伸",
+    "RIGHT_STRETCH":    "右侧拉伸",
+    "LEFT_HAND_UP":     "左手上举",
+    "RIGHT_HAND_UP":    "右手上举",
+    "BOTH_HANDS_UP":    "双手上举",
+    "SQUATTING":        "蹲下",
+    "SQUAT":            "蹲下",
+    "RAISING_LEFT_LEG":  "左抬腿",
+    "RAISING_RIGHT_LEG": "右抬腿",
+    "LEFT_LEG_RAISE":   "左抬腿",
+    "RIGHT_LEG_RAISE":  "右抬腿",
+    "JUMPING":          "跳跃",
+    "STANDING":         "站立",
+    "BENDING":          "弯腰",
+}
+
+def get_action_display_name(action_id: str) -> str:
+    """内部动作 ID → 中文显示名"""
+    return ACTION_DISPLAY_NAMES.get(action_id, action_id)
+
+_FONT_PATHS = [
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "C:/Windows/Fonts/simsun.ttc",
+]
+
 def _get_font(size):
     if size not in _FONT_CACHE:
-        try:
-            _FONT_CACHE[size] = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", size)
-        except Exception:
+        for fp in _FONT_PATHS:
+            if os.path.isfile(fp):
+                try:
+                    _FONT_CACHE[size] = ImageFont.truetype(fp, size)
+                    break
+                except Exception:
+                    continue
+        else:
             _FONT_CACHE[size] = ImageFont.load_default()
     return _FONT_CACHE[size]
 
@@ -884,50 +925,59 @@ def draw_game_ui(img, game):
     cv2.rectangle(img, (30, bar_y), (30 + bar_w, bar_y + 12),
                  GREEN if progress > 0.3 else YELLOW if progress > 0.1 else RED, cv2.FILLED)
 
-    mode_text = f"模式: {game.mode}"
-    cv2.putText(img, mode_text, (30, bar_y - 6), FONT_FACE, 0.5, WHITE, 1, cv2.LINE_AA)
-    cv2.putText(img, "[R] 重新开始  [Q] 结束",
-                (iw - 280, bar_y - 6), FONT_FACE, 0.4, (150, 150, 150), 1, cv2.LINE_AA)
+    mode_names = {'practice': '轻松', 'normal': '标准', 'hard': '活力'}
+    mode_display = mode_names.get(game.mode, game.mode)
+    mode_text = f"模式: {mode_display}"
+    put_chinese_text(img, mode_text, (30, bar_y - 6), 18, WHITE, anchor='lt')
+    put_chinese_text(img, "[R] 重新开始  [Q] 结束",
+                     (iw - 260, bar_y - 6), 14, (150, 150, 150), anchor='lt')
 
 
 def draw_game_over(img, game):
-    """全屏游戏结束画面"""
+    """全屏放松完成画面 — 使用 PIL 绘制中文"""
     img[:] = (20, 20, 20)
 
     ih, iw = img.shape[:2]
-    cx, cy = iw // 2, ih // 2
+    cx = iw // 2
+
+    mode_names = {'practice': '轻松', 'normal': '标准', 'hard': '活力'}
+    mode_display = mode_names.get(game.mode, game.mode)
 
     lines = [
-        ("放松完成", 2.0, 4, RED),
-        ("", 0, 0, WHITE),
-        (f"完成度: {game.score}", 1.2, 3, WHITE),
-        (f"最佳完成度:  {game.high_score}", 0.8, 2, YELLOW),
-        (f"模式: {game.mode}", 0.7, 2, (180, 180, 180)),
-        ("", 0, 0, WHITE),
-        ("按 R 重新开始", 1.0, 3, GREEN),
+        ("放松完成", 52, RED),
+        ("", 0, WHITE),
+        (f"完成度: {game.score}", 30, WHITE),
+        (f"最佳完成度:  {game.high_score}", 22, YELLOW),
+        (f"模式: {mode_display}", 18, (180, 180, 180)),
+        ("", 0, WHITE),
+        ("按 R 重新开始", 28, GREEN),
     ]
 
-    total_h = 0
     spacing = 50
-    for text, scale, thick, color in lines:
+    total_h = 0
+    for text, font_size, color in lines:
         if text:
-            ts, _ = cv2.getTextSize(text, FONT_FACE, scale, thick)
-            total_h += ts[1] + spacing // 2
+            font = _get_font(font_size)
+            pil_tmp = PILImage.new('RGB', (1, 1))
+            draw_tmp = ImageDraw.Draw(pil_tmp)
+            bbox = draw_tmp.textbbox((0, 0), text, font=font)
+            total_h += (bbox[3] - bbox[1]) + spacing // 2
         else:
             total_h += 15
 
-    start_y = cy - total_h // 2
+    start_y = (ih - total_h) // 2
     current_y = start_y
 
-    for text, scale, thick, color in lines:
+    for text, font_size, color in lines:
         if not text:
             current_y += 15
             continue
-        ts, _ = cv2.getTextSize(text, FONT_FACE, scale, thick)
-        tw, th = ts
-        tx = cx - tw // 2
-        cv2.putText(img, text, (tx, current_y + th), FONT_FACE, scale, color, thick, cv2.LINE_AA)
-        current_y += th + spacing
+        put_chinese_text(img, text, (cx, current_y), font_size, color, anchor='mt')
+        font = _get_font(font_size)
+        pil_tmp = PILImage.new('RGB', (1, 1))
+        draw_tmp = ImageDraw.Draw(pil_tmp)
+        bbox = draw_tmp.textbbox((0, 0), text, font=font)
+        current_y += (bbox[3] - bbox[1]) + spacing
 
 
 # ========== [11] 骨架绘制（简化版，用于游戏） ==========
