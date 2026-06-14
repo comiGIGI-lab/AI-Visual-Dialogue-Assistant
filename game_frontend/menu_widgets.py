@@ -48,6 +48,7 @@ class MenuPage(QWidget):
         layout.addWidget(title)
 
         subtitle = QLabel("面向久坐办公人群的 3D 视觉健康陪伴助手")
+        subtitle = QLabel("面向久坐办公人群的 3D 视觉互动放松助手")
         subtitle.setObjectName("subtitleLabel")
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setWordWrap(True)
@@ -56,6 +57,7 @@ class MenuPage(QWidget):
         desc = QLabel(
             'AI 会观察你的坐姿与活动状态。你可以说出身体不适，'
             '例如“我肩膀酸”“我脖子紧”“腰背僵硬”，系统会推荐适合的放松动作。')
+        desc = QLabel("通过 Orbbec 3D 相机、YOLO 人体检测和 MediaPipe 姿态估计，引导用户完成轻量化身体活动。")
         desc.setStyleSheet("color: #556688; font-size: 14px; font-family: 'Microsoft YaHei';")
         desc.setAlignment(Qt.AlignCenter)
         desc.setWordWrap(True)
@@ -85,6 +87,10 @@ class MenuPage(QWidget):
         self.btn_guide = MenuButton("  使用说明  ")
         self.btn_guide.clicked.connect(self.guide_clicked.emit)
         layout.addWidget(self.btn_guide, alignment=Qt.AlignCenter)
+
+        self.btn_start = MenuButton("  开始 2 分钟放松  ")
+        self.btn_start.clicked.connect(self.start_clicked.emit)
+        layout.addWidget(self.btn_start, alignment=Qt.AlignCenter)
 
         self.btn_leaderboard = MenuButton("  放松记录  ")
         self.btn_leaderboard.clicked.connect(self.leaderboard_clicked.emit)
@@ -123,6 +129,9 @@ class DifficultyPage(QWidget):
          '需要站立并完整入镜，包含更多身体动作。', '#ffaa00'),
         ('ai_recommend', 'AI 推荐',
          '根据当前观察状态和语音描述生成动作组合。', '#00d4ff'),
+        ('practice', '轻松模式', '适合办公间隙，动作节奏较慢', '#00ff88'),
+        ('normal',   '标准模式', '推荐日常使用，动作节奏适中', '#ffaa00'),
+        ('hard',     '活力模式', '节奏更快，适合状态较好时挑战', '#ff4466'),
     ]
 
     def __init__(self, parent=None):
@@ -143,6 +152,7 @@ class DifficultyPage(QWidget):
 
         # 标题
         title = QLabel("选择本次放松方案")
+        title = QLabel("选择放松模式")
         title.setObjectName("titleLabel")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)

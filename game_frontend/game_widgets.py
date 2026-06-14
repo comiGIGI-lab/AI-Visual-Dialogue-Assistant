@@ -662,6 +662,7 @@ class ScorePanel(QWidget):
         layout.setSpacing(8)
 
         self._score_label = QLabel("完成度  0")
+        self._score_label = QLabel("放松积分  0")
         self._score_label.setObjectName("scoreLabel")
         self._score_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -670,6 +671,7 @@ class ScorePanel(QWidget):
         self._combo_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         self._time_label = QLabel("本轮剩余  30s")
+        self._time_label = QLabel("剩余  30s")
         self._time_label.setObjectName("timeLabel")
         self._time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -685,6 +687,7 @@ class ScorePanel(QWidget):
 
     def update_status(self, score, combo, time_left, fps=0):
         self._score_label.setText(f"完成度  {score}")
+        self._score_label.setText(f"放松积分  {score}")
         if combo >= 2:
             self._combo_label.setText(f"连续完成  x{combo}")
             self._combo_label.setObjectName("comboLabelHigh" if combo >= 5 else "comboLabel")
@@ -694,6 +697,7 @@ class ScorePanel(QWidget):
             self._combo_label.setText("")
 
         self._time_label.setText(f"本轮剩余  {int(time_left)}s")
+        self._time_label.setText(f"剩余  {int(time_left)}s")
         self._time_label.setObjectName("timeLabelWarn" if time_left <= 5 else "timeLabel")
         self._time_label.style().unpolish(self._time_label)
         self._time_label.style().polish(self._time_label)
