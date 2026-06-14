@@ -28,7 +28,7 @@ PAGE_GAME = 3
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("动作模仿挑战游戏")
+        self.setWindowTitle("OfficeFit AI 视觉对话放松助手")
         self.setMinimumSize(1024, 768)
         self.resize(1280, 860)
         self.setStyleSheet(GLOBAL_QSS)

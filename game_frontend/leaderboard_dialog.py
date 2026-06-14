@@ -25,7 +25,7 @@ def save_leaderboard(entries):
 class LeaderboardDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('排行榜')
+        self.setWindowTitle('放松记录')
         self.setMinimumSize(500, 400)
         self.setStyleSheet("""
             QDialog { background-color: #1a1a2e; }
@@ -53,7 +53,7 @@ class LeaderboardDialog(QDialog):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        title = QLabel('🏆 排行榜 Top 20')
+        title = QLabel('OfficeFit 放松记录')
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet('font-size: 24px; font-weight: bold; color: #ffaa00;')
         layout.addWidget(title)
