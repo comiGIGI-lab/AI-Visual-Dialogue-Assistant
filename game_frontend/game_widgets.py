@@ -66,10 +66,11 @@ class LoadingOverlay(QWidget):
     """加载覆盖层：预编程平滑进度条动画（不依赖后端进度）"""
 
     STAGES = [
-        (20, "正在启动相机..."),
-        (45, "正在加载姿态模型..."),
-        (70, "正在加载检测模型..."),
-        (90, "正在准备游戏..."),
+        (15, "正在启动 Orbbec 3D 相机..."),
+        (30, "请站到画面中央，启动姿态识别模型..."),
+        (55, "正在加载检测模型..."),
+        (80, "正在准备放松训练..."),
+        (90, "即将就绪..."),
     ]
 
     def __init__(self, parent=None):
@@ -441,7 +442,7 @@ class ScorePanel(QWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
 
-        self._score_label = QLabel("Score  0")
+        self._score_label = QLabel("放松积分  0")
         self._score_label.setObjectName("scoreLabel")
         self._score_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -449,7 +450,7 @@ class ScorePanel(QWidget):
         self._combo_label.setObjectName("comboLabel")
         self._combo_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self._time_label = QLabel("Time  30s")
+        self._time_label = QLabel("剩余  30s")
         self._time_label.setObjectName("timeLabel")
         self._time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -464,16 +465,16 @@ class ScorePanel(QWidget):
         layout.addStretch()
 
     def update_status(self, score, combo, time_left, fps=0):
-        self._score_label.setText(f"Score  {score}")
+        self._score_label.setText(f"放松积分  {score}")
         if combo >= 2:
-            self._combo_label.setText(f"Combo  x{combo}")
+            self._combo_label.setText(f"连续完成  x{combo}")
             self._combo_label.setObjectName("comboLabelHigh" if combo >= 5 else "comboLabel")
             self._combo_label.style().unpolish(self._combo_label)
             self._combo_label.style().polish(self._combo_label)
         else:
             self._combo_label.setText("")
 
-        self._time_label.setText(f"Time  {int(time_left)}s")
+        self._time_label.setText(f"剩余  {int(time_left)}s")
         self._time_label.setObjectName("timeLabelWarn" if time_left <= 5 else "timeLabel")
         self._time_label.style().unpolish(self._time_label)
         self._time_label.style().polish(self._time_label)

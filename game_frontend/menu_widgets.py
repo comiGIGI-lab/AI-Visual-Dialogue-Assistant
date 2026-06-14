@@ -40,29 +40,29 @@ class MenuPage(QWidget):
         layout.addSpacing(10)
 
         # 标题
-        title = QLabel("动作模仿挑战")
+        title = QLabel("OfficeFit AI 视觉对话放松助手")
         title.setObjectName("titleLabel")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
-        subtitle = QLabel("用你的身体来玩游戏")
+        subtitle = QLabel("面向久坐办公人群的 3D 视觉互动放松助手")
         subtitle.setObjectName("subtitleLabel")
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
-        desc = QLabel("跟随屏幕提示做出对应动作，挑战最高分！")
+        desc = QLabel("通过 Orbbec 3D 相机、YOLO 人体检测和 MediaPipe 姿态估计，引导用户完成轻量化身体活动。")
         desc.setStyleSheet("color: #556688; font-size: 14px; font-family: 'Microsoft YaHei';")
         desc.setAlignment(Qt.AlignCenter)
         layout.addWidget(desc)
 
         layout.addSpacing(28)
 
-        self.btn_start = MenuButton("  START  ")
+        self.btn_start = MenuButton("  开始 2 分钟放松  ")
         self.btn_start.clicked.connect(self.start_clicked.emit)
         layout.addWidget(self.btn_start, alignment=Qt.AlignCenter)
 
-        self.btn_leaderboard = MenuButton("  排行榜  ")
+        self.btn_leaderboard = MenuButton("  放松记录  ")
         self.btn_leaderboard.clicked.connect(self.leaderboard_clicked.emit)
         layout.addWidget(self.btn_leaderboard, alignment=Qt.AlignCenter)
 
@@ -85,9 +85,9 @@ class DifficultyPage(QWidget):
     back_clicked = Signal()
 
     DIFFICULTIES = [
-        ('practice', '练习模式', '每5秒出题  ·  20% 反转  ·  轻松上手', '#00ff88'),
-        ('normal',   '普通模式', '每3秒出题  ·  40% 反转  ·  均衡挑战', '#ffaa00'),
-        ('hard',     '困难模式', '每2秒出题  ·  50% 反转  ·  极限反应', '#ff4466'),
+        ('practice', '轻松模式', '适合办公间隙，动作节奏较慢', '#00ff88'),
+        ('normal',   '标准模式', '推荐日常使用，动作节奏适中', '#ffaa00'),
+        ('hard',     '活力模式', '节奏更快，适合状态较好时挑战', '#ff4466'),
     ]
 
     def __init__(self, parent=None):
@@ -105,7 +105,7 @@ class DifficultyPage(QWidget):
         layout.addWidget(accent, alignment=Qt.AlignCenter)
         layout.addSpacing(8)
 
-        title = QLabel("选择难度")
+        title = QLabel("选择放松模式")
         title.setObjectName("titleLabel")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
@@ -213,7 +213,7 @@ class GameOverPage(QWidget):
         layout.setAlignment(Qt.AlignCenter)
         layout.setSpacing(14)
 
-        self._title = QLabel("GAME OVER")
+        self._title = QLabel("本次放松完成")
         self._title.setObjectName("gameOverTitle")
         self._title.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._title)
