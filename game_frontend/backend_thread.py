@@ -603,14 +603,20 @@ class BackendThread(QThread):
             result = img_bgr.copy()
             for pid, landmarks_2d in all_landmarks.items():
                 draw_skeleton_multi(result, landmarks_2d, pid)
-                # 标签
+                # 标签：内部名 → 中文显示名，PIL 绘制（cv2.putText 不支持中文）
                 if landmarks_2d and len(landmarks_2d) >= 33:
                     head_x = int(sum(landmarks_2d[i][0] for i in [0, 11, 12] if landmarks_2d[i][2] > 0.5) / max(1, sum(1 for i in [0, 11, 12] if landmarks_2d[i][2] > 0.5)))
                     head_y = min(lm[1] for lm in landmarks_2d[:11] if lm[2] > 0.5)
                     action = all_actions.get(pid, '?')
-                    label = f"当前动作: {action}"
-                    cv2.putText(result, label, (head_x - 40, head_y - 12),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                    display_name = g.get_action_display_name(action) if hasattr(g, 'get_action_display_name') else action
+                    # 仅当有有效中文名时绘制（避免 STANDING 等英文出现）
+                    if display_name and not any('一' <= c <= '鿿' for c in display_name):
+                        pass  # 纯英文内部名，不绘制在视频上
+                    else:
+                        g.put_chinese_text(
+                            result, display_name,
+                            (head_x - 40, head_y - 12),
+                            18, (255, 255, 255), anchor='mt')
 
             return all_actions, all_landmarks, result
 
