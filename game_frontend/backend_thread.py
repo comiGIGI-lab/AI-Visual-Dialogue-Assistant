@@ -226,49 +226,177 @@ class BackendThread(QThread):
         # ═══════════ Phase: loading — 启动相机 ═══════════
         self._emit_loading('正在启动相机...', 5)
 
-        from pyorbbecsdk import Pipeline, Config, OBSensorType, OBFormat, AlignFilter, OBStreamType
+        from game_frontend.camera_provider import (
+            create_camera_provider, WebcamCameraProvider,
+            CameraUnavailableError,
+        )
+
+        provider = None
+        fallback_reason = None
+        error_message = None
 
         try:
-            pipeline = Pipeline()
-            config = Config()
-            color_profiles = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
-            depth_profiles = pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
-            config.enable_stream(color_profiles.get_default_video_stream_profile())
-            config.enable_stream(depth_profiles.get_default_video_stream_profile())
-            pipeline.start(config)
-            cam_w = color_profiles.get_default_video_stream_profile().get_width()
-            cam_h = color_profiles.get_default_video_stream_profile().get_height()
-            print(f"[后端] 相机已启动 ({cam_w}x{cam_h})")
-        except Exception as e:
-            print(f"[错误] 相机启动失败: {e}")
-            self._emit_loading(f'相机启动失败: {e}', -1)
+            provider = create_camera_provider(mode='auto')
+            provider.start()
+        except CameraUnavailableError as e:
+            # ── Orbbec 设备不可用 ──
+            error_message = str(e)
+            print(f"[后端] Orbbec 不可用: {error_message}")
+
+            if provider is not None and provider.mode == 'orbbec':
+                # 强制 orbbec 模式 — 不降级, 直接报错
+                self._emit_loading(
+                    f'未检测到 Orbbec 3D 相机\n\n'
+                    f'{error_message}\n\n'
+                    f'请连接 Orbbec 设备后重试,\n'
+                    f'或切换为普通摄像头模式:\n'
+                    f'  $env:OFFICEFIT_CAMERA="webcam"',
+                    -1,
+                )
+                self.status_updated.emit({
+                    'phase': 'error',
+                    'camera_source': 'orbbec',
+                    'depth_available': False,
+                    'camera_mode_text': 'Orbbec 模式 — 设备不可用',
+                    'fallback_reason': None,
+                    'error_message': error_message,
+                })
+                return
+
+            # auto 模式 — 降级到 webcam
+            fallback_reason = (
+                f"未检测到 Orbbec 3D 相机，已切换普通摄像头兼容模式"
+            )
+            print(f"[后端] {fallback_reason}")
+
+            try:
+                provider.stop()
+            except Exception:
+                pass
+
+            try:
+                provider = WebcamCameraProvider(camera_index=0)
+                provider.mode = 'auto'
+                provider.fallback_reason = fallback_reason
+                provider.start()
+            except RuntimeError as e2:
+                error_message = (
+                    f"Orbbec 不可用, webcam 降级也失败: {e2}"
+                )
+                print(f"[错误] {error_message}")
+                self._emit_loading(error_message, -1)
+                self.status_updated.emit({
+                    'phase': 'error',
+                    'camera_source': 'none',
+                    'depth_available': False,
+                    'camera_mode_text': '无可用相机',
+                    'fallback_reason': fallback_reason,
+                    'error_message': error_message,
+                })
+                return
+        except RuntimeError as e:
+            # ── 其他启动异常 ──
+            error_message = str(e)
+            print(f"[错误] 相机启动异常: {error_message}")
+
+            if provider is not None and provider.mode == 'orbbec':
+                self._emit_loading(
+                    f'Orbbec 相机启动失败\n\n{error_message}',
+                    -1,
+                )
+                self.status_updated.emit({
+                    'phase': 'error',
+                    'camera_source': 'orbbec',
+                    'depth_available': False,
+                    'camera_mode_text': 'Orbbec 启动失败',
+                    'fallback_reason': None,
+                    'error_message': error_message,
+                })
+                return
+
+            # auto 模式下也尝试降级
+            fallback_reason = (
+                f"Orbbec 启动失败: {error_message}"
+                f" → 已降级到 USB 摄像头"
+            )
+            print(f"[后端] {fallback_reason}")
+            try:
+                provider.stop()
+            except Exception:
+                pass
+            try:
+                provider = WebcamCameraProvider(camera_index=0)
+                provider.mode = 'auto'
+                provider.fallback_reason = fallback_reason
+                provider.start()
+            except RuntimeError as e2:
+                error_message = f"webcam 降级也失败: {e2}"
+                print(f"[错误] {error_message}")
+                self._emit_loading(error_message, -1)
+                self.status_updated.emit({
+                    'phase': 'error',
+                    'camera_source': 'none',
+                    'depth_available': False,
+                    'camera_mode_text': '无可用相机',
+                    'fallback_reason': fallback_reason,
+                    'error_message': error_message,
+                })
+                return
+
+        if not provider.is_opened():
+            self._emit_loading('相机启动失败: 设备未能打开', -1)
             return
 
-        align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
-        camera_param = pipeline.get_camera_param()
-        fx = camera_param.rgb_intrinsic.fx
-        fy = camera_param.rgb_intrinsic.fy
-        cx = camera_param.rgb_intrinsic.cx
-        cy = camera_param.rgb_intrinsic.cy
+        cam_status = provider.get_status()
+        camera_source = cam_status['source']
+        depth_available = cam_status['depth_available']
+        cam_w, cam_h = cam_status.get('resolution', (0, 0))
+
+        if not fallback_reason:
+            fallback_reason = cam_status.get('fallback_reason')
+
+        camera_mode_text = (
+            "Orbbec 3D 深度相机模式" if depth_available
+            else "普通摄像头兼容模式（深度功能不可用）"
+        )
+        print(
+            f"[后端] 相机已启动 (source={camera_source}, "
+            f"{cam_w}x{cam_h}, depth={depth_available})"
+        )
+        if fallback_reason:
+            print(f"[后端] 降级原因: {fallback_reason}")
+
+        # 内参
+        fx = fy = cx = cy = None
+        if depth_available and cam_status.get('intrinsics'):
+            intr = cam_status['intrinsics']
+            fx, fy, cx, cy = intr['fx'], intr['fy'], intr['cx'], intr['cy']
 
         g = _import_game_utils()
 
         # 预推帧
         self._emit_loading('正在获取画面...', 15)
-        for _ in range(10):
+        warmup_ok = False
+        for i in range(15):
             try:
-                frames = pipeline.wait_for_frames(200)
-                if frames:
-                    frames = align_filter.process(frames)
-                    if frames:
-                        fs = frames.as_frame_set()
-                        cf = fs.get_color_frame()
-                        if cf:
-                            img = g.frame_to_bgr_image(cf)
-                            if img is not None:
-                                write_frame(img)
+                packet = provider.read(timeout_ms=300)
+                if packet and packet.color_bgr is not None:
+                    write_frame(packet.color_bgr)
+                    warmup_ok = True
+                    break
             except Exception:
                 pass
+            # 防止无限等待: 最多 15 次 × 300ms = 4.5s
+        if not warmup_ok:
+            self._emit_loading(
+                '相机已连接但无法读取画面, 请检查相机是否被其他程序占用',
+                -1,
+            )
+            try:
+                provider.stop()
+            except Exception:
+                pass
+            return
 
         # ═══════════ Phase: loading — 加载 MediaPipe ═══════════
         self._emit_loading('正在加载 MediaPipe 姿态模型...', 30)
@@ -496,22 +624,11 @@ class BackendThread(QThread):
 
         while self._running:
             try:
-                frames = pipeline.wait_for_frames(100)
-                if not frames:
-                    continue
-                frames = align_filter.process(frames)
-                if not frames:
-                    continue
-                frames = frames.as_frame_set()
-
-                color_frame = frames.get_color_frame()
-                depth_frame = frames.get_depth_frame()
-                if not color_frame or not depth_frame:
+                packet = provider.read(timeout_ms=100)
+                if not packet or packet.color_bgr is None:
                     continue
 
-                img_bgr = g.frame_to_bgr_image(color_frame)
-                if img_bgr is None:
-                    continue
+                img_bgr = packet.color_bgr
 
                 if phase in ('waiting_for_hands', 'countdown'):
                     action_text, result = run_single_for_hands(img_bgr)
@@ -530,6 +647,11 @@ class BackendThread(QThread):
                             self.status_updated.emit({
                                 'phase': 'waiting_for_hands',
                                 'mode': self.mode,
+                                'camera_source': camera_source,
+                                'depth_available': depth_available,
+                                'camera_mode_text': camera_mode_text,
+                                'fallback_reason': fallback_reason,
+                                'error_message': error_message,
                             })
                             continue
 
@@ -541,6 +663,11 @@ class BackendThread(QThread):
                                 'phase': 'countdown',
                                 'countdown': cd_remain,
                                 'mode': self.mode,
+                                'camera_source': camera_source,
+                                'depth_available': depth_available,
+                                'camera_mode_text': camera_mode_text,
+                                'fallback_reason': fallback_reason,
+                                'error_message': error_message,
                             })
                             continue
                         else:
@@ -589,6 +716,11 @@ class BackendThread(QThread):
                     'prompt_type': game.prompt_type,
                     'game_over': game.game_over,
                     'high_score': game.high_score,
+                    'camera_source': camera_source,
+                    'depth_available': depth_available,
+                    'camera_mode_text': camera_mode_text,
+                    'fallback_reason': fallback_reason,
+                    'error_message': error_message,
                 }
 
                 self.status_updated.emit(status)
@@ -601,7 +733,7 @@ class BackendThread(QThread):
 
         # ---- 清理 ----
         try:
-            pipeline.stop()
+            provider.stop()
             pose_landmarker.close()
         except Exception:
             pass

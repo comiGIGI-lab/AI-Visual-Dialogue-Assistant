@@ -113,6 +113,40 @@ class LoadingOverlay(QWidget):
         self._msg_index = 0
         self._done = False
 
+        # 相机状态信息（loading 期间可动态更新）
+        self._camera_status_label = QLabel("")
+        self._camera_status_label.setAlignment(Qt.AlignCenter)
+        self._camera_status_label.setStyleSheet(
+            "color: #8899aa; font-size: 14px; font-family: 'Microsoft YaHei';")
+        layout.addWidget(self._camera_status_label)
+
+    def set_camera_status(self, text: str):
+        """loading 期间更新相机状态文字"""
+        self._camera_status_label.setText(text)
+
+    def show_error(self, title: str, message: str, hint: str = ""):
+        """显示启动失败错误信息"""
+        if self._fill_anim is not None:
+            self._fill_anim.stop()
+        self._progress.setValue(0)
+        self._progress.setVisible(False)
+
+        lines = []
+        if title:
+            lines.append(title)
+        if message:
+            lines.append(message)
+        if hint:
+            lines.append(hint)
+        display = "\n".join(lines) if lines else "启动失败"
+
+        self._label.setText(display)
+        self._label.setStyleSheet(
+            "color: #ff6666; font-size: 20px; font-weight: bold;"
+            " font-family: 'Microsoft YaHei';")
+        self._camera_status_label.setText("")
+        self._done = True  # 阻止 finish_loading 覆盖错误信息
+
     def start_fake_loading(self):
         """启动预编程的平滑加载动画：0→90% 在 3.5s 内完成"""
         if self._fill_anim is not None:
@@ -172,7 +206,12 @@ class LoadingOverlay(QWidget):
         self._msg_index = 0
         self._done = False
         self._progress.setValue(0)
+        self._progress.setVisible(True)
         self._label.setText("Loading...")
+        self._label.setStyleSheet(
+            "color: #ffffff; font-size: 28px; font-weight: bold;"
+            " font-family: 'Microsoft YaHei';")
+        self._camera_status_label.setText("")
 
 
 # ---------- 倒计时覆盖层 ----------
@@ -502,6 +541,11 @@ class TimeBar(QWidget):
         self._mode_label.setObjectName("modeLabel")
         info_layout.addWidget(self._mode_label)
         info_layout.addStretch()
+        self._camera_label = QLabel()
+        self._camera_label.setObjectName("cameraModeLabel")
+        self._camera_label.setStyleSheet(
+            "color: #6677aa; font-size: 12px; font-family: 'Microsoft YaHei';")
+        info_layout.addWidget(self._camera_label)
 
         layout.addWidget(self._bar)
         layout.addLayout(info_layout)
@@ -525,6 +569,35 @@ class TimeBar(QWidget):
         self._mode_label.setText(f"Mode  {mode.upper()}")
         self._mode_label.setStyleSheet(f"color: {color}; font-size: 15px;"
                                         " font-family: 'Microsoft YaHei'; font-weight: bold;")
+
+    def update_camera(self, camera_source, depth_available,
+                      camera_mode_text="", fallback_reason=""):
+        if camera_mode_text:
+            text = camera_mode_text
+        elif camera_source == 'orbbec':
+            if depth_available:
+                text = "Orbbec 3D 深度相机模式"
+            else:
+                text = "Orbbec 彩色模式"
+        elif camera_source == 'webcam':
+            text = "普通摄像头兼容模式"
+        else:
+            text = ""
+
+        if depth_available:
+            color = "#00ff88"
+        elif camera_source == 'webcam':
+            color = "#ffaa00"
+        else:
+            color = "#6677aa"
+
+        self._camera_label.setText(text)
+        self._camera_label.setStyleSheet(
+            f"color: {color}; font-size: 12px; font-family: 'Microsoft YaHei';")
+
+        # 如果有降级原因, 在 tooltip 中显示
+        if fallback_reason:
+            self._camera_label.setToolTip(fallback_reason)
 
 
 
@@ -581,9 +654,35 @@ class GamePage(QWidget):
         self._status = status
         self._phase = phase
 
+        # 相机状态信息（跨所有 phase 更新）
+        camera_text = status.get('camera_mode_text', '')
+        if camera_text and self._loading_overlay.isVisible():
+            self._loading_overlay.set_camera_status(camera_text)
+
+        if phase == 'error':
+            # 后端启动失败 — 在 loading 覆盖层上显示错误信息
+            self._loading_overlay.show()
+            self._loading_overlay.raise_()
+            err_msg = status.get('error_message', '未知错误')
+            fallback = status.get('fallback_reason', '')
+            camera = status.get('camera_mode_text', '')
+            self._loading_overlay.show_error(
+                camera,
+                err_msg,
+                fallback,
+            )
+            return
+
         if phase == 'loading':
             self._loading_overlay.show()
             self._loading_overlay.raise_()
+            # loading 阶段也显示相机模式信息（如果已有）
+            if status.get('camera_source'):
+                self._loading_overlay.set_camera_status(
+                    status.get('camera_mode_text', '')
+                    + (f"\n{status.get('fallback_reason', '')}"
+                       if status.get('fallback_reason') else "")
+                )
             return
 
         if phase != 'loading' and self._loading_overlay.isVisible():
@@ -628,6 +727,12 @@ class GamePage(QWidget):
         )
         self._time_bar.update_time(status.get('time_left', 30))
         self._time_bar.update_mode(status.get('mode', 'practice'))
+        self._time_bar.update_camera(
+            status.get('camera_source', 'unknown'),
+            status.get('depth_available', False),
+            status.get('camera_mode_text', ''),
+            status.get('fallback_reason', ''),
+        )
 
         new_score = status.get('score', 0)
         new_combo = status.get('combo', 0)

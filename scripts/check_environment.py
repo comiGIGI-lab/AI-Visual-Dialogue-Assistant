@@ -291,6 +291,9 @@ def check_camera():
     print("  摄像头检查")
     print("=" * 60)
 
+    orbbec_ok = False
+    webcam_ok = False
+
     # 检查 Orbbec 相机
     ok, detail = _check_import("pyorbbecsdk")
     if ok:
@@ -300,6 +303,7 @@ def check_camera():
             device_list = ctx.query_devices()
             count = device_list.get_count()
             if count > 0:
+                orbbec_ok = True
                 names = []
                 for i in range(count):
                     dev = device_list.get_device_by_index(i)
@@ -307,33 +311,50 @@ def check_camera():
                     names.append(f"{info.get_name()} (SN:{info.get_serial_number()})")
                 _result(_ICON_PASS, f"Orbbec 3D 相机: 检测到 {count} 台", "; ".join(names))
             else:
-                _result(_ICON_FAIL, "Orbbec 3D 相机: 未检测到设备",
-                        "请连接 Orbbec 相机并确认设备管理器中已识别")
+                _result(_ICON_WARN, "Orbbec 3D 相机: 未检测到设备",
+                        "Orbbec 设备未连接，将尝试降级到 USB 摄像头")
         except Exception as e:
-            _result(_ICON_FAIL, "Orbbec 3D 相机: 查询失败", str(e))
+            _result(_ICON_WARN, "Orbbec 3D 相机: 查询失败", str(e))
     else:
-        _result(_ICON_FAIL, "Orbbec 3D 相机",
-                "pyorbbecsdk 未正确安装（pip 包名: pyorbbecsdk2），无法查询设备")
+        _result(_ICON_WARN, "Orbbec 3D 相机",
+                f"pyorbbecsdk 未安装（pip 包名: pyorbbecsdk2）\n"
+                "          Orbbec 不可用，将尝试降级到 USB 摄像头")
 
-    # 检查普通 USB 摄像头（webcam fallback 预览）
+    # 检查普通 USB 摄像头
     try:
         import cv2
         cap = cv2.VideoCapture(0)
         if cap.isOpened():
             ret, frame = cap.read()
             if ret:
+                webcam_ok = True
                 h, w = frame.shape[:2]
                 _result(_ICON_PASS, f"USB 摄像头 (index=0): {w}x{h}",
-                        "普通摄像头可用（当前版本暂不使用，未来版本会启用）")
+                        "RGB 兼容模式可用")
             else:
                 _result(_ICON_WARN, "USB 摄像头 (index=0): 已打开但无法读取帧",
                         "可能是虚拟摄像头或权限不足")
             cap.release()
         else:
             _result(_ICON_WARN, "USB 摄像头 (index=0): 未找到",
-                    "无普通摄像头可用（不影响 Orbbec 模式运行）")
+                    "无 USB 摄像头可用")
     except Exception as e:
         _result(_ICON_WARN, "USB 摄像头检查失败", str(e))
+
+    # ── 相机模式总结 ──
+    print()
+    if orbbec_ok:
+        print("  ── 相机运行模式: Full mode (Orbbec 3D 深度相机)")
+        print("     支持: RGB + Depth、YOLO、MediaPipe、3D 骨架、活体检测")
+    elif webcam_ok:
+        print("  ── 相机运行模式: Fallback mode (USB 摄像头 RGB 兼容)")
+        print("     支持: RGB 图像、YOLO、MediaPipe、互动游戏/放松流程")
+        print("     不支持: 深度信息、3D 骨架、活体检测")
+    else:
+        print("  ── 相机运行模式: No camera available")
+        print("     请连接 Orbbec 3D 相机或 USB 摄像头")
+
+    return orbbec_ok, webcam_ok
 
 
 # ============================================================================
@@ -391,7 +412,7 @@ def print_summary():
             print(f"  {idx}. 将缺失的模型文件放入 models/ 目录或项目根目录")
             idx += 1
         if any("相机" in f for f in _failures):
-            print(f"  {idx}. 连接 Orbbec 3D 相机并确认设备管理器已识别")
+            print(f"  {idx}. 未检测到任何可用摄像头 — 请连接 Orbbec 3D 相机或 USB 摄像头")
             idx += 1
         print()
         print(f"  修复后重新运行: python scripts/check_environment.py")
@@ -414,9 +435,30 @@ def main():
     check_python()
     check_dependencies()
     check_resources()
-    check_camera()
+    orbbec_ok, webcam_ok = check_camera()
+
+    # 调整相机相关 FAIL → 如果 webcam 可用，Orbbec 缺失不算硬失败
+    # (check_camera 已经将 Orbbec 缺失改为 WARN，这里处理遗留的 FAIL)
+    orbbec_fail_items = [f for f in _failures if "Orbbec" in f or "相机" in f]
+    if orbbec_fail_items and webcam_ok:
+        for item in orbbec_fail_items:
+            _failures.remove(item)
+            _warnings.append(item + "（已降级到 USB 摄像头兼容模式）")
 
     n_fail = print_summary()
+
+    # 额外打印相机可用性提示
+    if not orbbec_ok:
+        print("  ──────────────────────────────────────────────")
+        if webcam_ok:
+            print("  [INFO] 没有 Orbbec 相机时仍可运行，但深度、3D 骨架、活体检测不可用。")
+            print("  启动命令: python run_game_frontend.py")
+            print("  强制测试 webcam 模式:")
+            print("    Windows PowerShell:")
+            print('      $env:OFFICEFIT_CAMERA="webcam"; python run_game_frontend.py')
+        else:
+            print("  [INFO] 没有检测到任何可用摄像头，请连接 Orbbec 或 USB 摄像头。")
+        print()
 
     sys.exit(0 if n_fail == 0 else 1)
 

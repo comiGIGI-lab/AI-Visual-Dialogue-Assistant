@@ -91,9 +91,27 @@ python run_game_frontend.py
 | **操作系统** | Windows 10 / 11（64 位） |
 | **GPU（推荐）** | 支持 DirectX 12 的 GPU，搭配 `onnxruntime-directml` |
 | **CPU（备选）** | 纯 CPU 推理亦可，帧率约 8–15 FPS |
-| **降级兼容** | 笔记本自带 USB 摄像头 — 环境检查脚本已可检测，主程序降级通道后续接入 |
+| **降级兼容** | 笔记本自带 USB 摄像头 — 已完整支持 RGB 兼容模式 |
 
-> ⚠️ **当前版本需要 Orbbec 3D 相机**。普通摄像头降级兼容正在开发中，届时深度相关特性（3D 骨架、活体检测）在降级模式下不可用，但核心游戏功能将完整保留。
+### 运行模式
+
+| 模式 | 条件 | 支持功能 |
+|------|------|----------|
+| **Orbbec 3D 模式** | Orbbec 相机已连接 + pyorbbecsdk 已安装 | RGB + Depth、YOLO、MediaPipe、3D 骨架、活体检测、完整游戏/放松流程 |
+| **USB 摄像头兼容模式** | 无 Orbbec 时自动启用 | RGB 图像、YOLO、MediaPipe、互动游戏/放松流程（无深度、3D 骨架、活体检测） |
+
+> 程序会自动检测：优先使用 Orbbec，不可用时降级到 USB 摄像头。也可以通过环境变量强制指定模式（见下方）。
+
+### 强制指定相机模式
+
+Windows PowerShell:
+```powershell
+# 强制使用普通 USB 摄像头（测试兼容模式）
+$env:OFFICEFIT_CAMERA="webcam"; python run_game_frontend.py
+
+# 强制使用 Orbbec（失败则报错退出）
+$env:OFFICEFIT_CAMERA="orbbec"; python run_game_frontend.py
+```
 
 ---
 
@@ -170,9 +188,11 @@ pip install pyorbbecsdk2
 
 ### 3. 相机启动失败 / 无画面
 
-- 确认 Orbbec 相机已通过 USB 连接，设备管理器中可见
-- 关闭其他占用相机的程序（如 Orbbec Viewer）
-- 当前版本不支持普通 USB 摄像头作为主相机（降级通道开发中）
+- 程序会自动尝试 Orbbec → USB 摄像头降级
+- 如果两种相机都不可用，确认至少有一个摄像头连接
+- 关闭其他占用相机的程序（如 Orbbec Viewer、其他视频应用）
+- 使用 `python scripts/check_environment.py` 检查相机状态
+- 没有 Orbbec 时，程序自动使用 RGB 兼容模式（深度/3D 骨架/活体检测不可用）
 
 ### 4. ONNX Runtime 仅 CPU 推理
 
@@ -194,7 +214,7 @@ pip install protobuf==4.25.9
 |------|------|:--:|
 | Phase 1 | 动作模仿互动游戏原型（PySide6 GUI + YOLO + MediaPipe） | ✅ 已完成 |
 | Phase 2 | 部署文件补齐 + 环境检查脚本 + README 文档 | ✅ 已完成 |
-| Phase 3 | 笔记本摄像头降级兼容（`cv2.VideoCapture` fallback） | 🔜 计划中 |
+| Phase 3 | 笔记本摄像头降级兼容（`cv2.VideoCapture` fallback） | ✅ 已完成 |
 | Phase 4 | 语音对话交互（语音出题 + 语音反馈） | 🔜 计划中 |
 | Phase 5 | 久坐智能提醒 + 跟练放松模式 | 🔜 计划中 |
 | Phase 6 | 运动统计面板 + 历史记录可视化 | 🔜 计划中 |
@@ -203,25 +223,7 @@ pip install protobuf==4.25.9
 
 ---
 
-<<<<<<< HEAD
 ## 注意事项
-=======
-## 项目进展
-
-| 阶段 | 内容 | 状态 |
-|------|------|:--:|
-| Phase 1 | 动作模仿互动游戏原型（PySide6 GUI + YOLO + MediaPipe） | ✅ 已完成 |
-| Phase 2 | 部署文件补齐 + 环境检查脚本 + README 文档 | ✅ 已完成 |
-| Phase 2.1 | UI 文案已从动作游戏适配为 OfficeFit 办公放松助手原型 | ✅ 已完成 |
-| Phase 3 | 笔记本摄像头降级兼容（`cv2.VideoCapture` fallback） | 🔜 计划中 |
-| Phase 4 | 语音对话交互（语音出题 + 语音反馈） | 🔜 计划中 |
-| Phase 5 | 久坐智能提醒 + 跟练放松模式 | 🔜 计划中 |
-| Phase 6 | 运动统计面板 + 历史记录可视化 | 🔜 计划中 |
-
----
-
-## 命令行参数
->>>>>>> feature/officefit-ui-adaptation
 
 - ❌ **不要**将 API key、账号密码、访问令牌提交到本仓库
 - ❌ **不要**将 Orbbec SDK 源码、固件包、驱动程序提交到本仓库
