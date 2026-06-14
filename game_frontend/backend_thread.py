@@ -1,10 +1,10 @@
-"""后端工作线程 — 相机采集 + YOLO + MediaPipe + 游戏状态机
+"""后端工作线程 — 相机采集 + YOLO + MediaPipe + 训练状态机
 
 Phase 流程:
   loading   → 相机启动 → AI 模型加载
   countdown → 3 秒倒计时
-  playing   → 单人游戏 / 多人对战
-  game_over → 游戏结束
+  playing   → 放松训练进行中
+  game_over → 训练完成
 """
 import time
 import threading
@@ -64,9 +64,9 @@ def _import_game_utils():
 # ---------- 多人骨架绘制 ----------
 
 PERSON_COLORS = [
-    ((255, 255, 0), (0, 255, 255), (255, 255, 255)),     # P0 黄/青
-    ((255, 0, 255), (128, 0, 255), (200, 200, 200)),      # P1 紫
-    ((0, 255, 0), (0, 200, 0), (180, 255, 180)),          # P2 绿
+    ((255, 255, 0), (0, 255, 255), (255, 255, 255)),
+    ((255, 0, 255), (128, 0, 255), (200, 200, 200)),
+    ((0, 255, 0), (0, 200, 0), (180, 255, 180)),
 ]
 
 SKELETON_CONNECTIONS = [
@@ -207,10 +207,16 @@ class PersonTracker:
 class BackendThread(QThread):
     status_updated = Signal(dict)
 
-    def __init__(self, mode='normal', sound_enabled=True, parent=None):
+    # 相机断联检测阈值：连续读取失败帧数 ≈ 3 秒（office / training 共用）
+    CAMERA_FAIL_THRESHOLD = 30
+
+    def __init__(self, mode='normal', sound_enabled=True, parent=None,
+                 workout_mode='upper_body', run_mode='training'):
         super().__init__(parent)
         self.mode = mode
         self.sound_enabled = sound_enabled
+        self.workout_mode = workout_mode  # 'upper_body' | 'full_body'
+        self.run_mode = run_mode  # 'office' | 'training'
         self._running = False
 
     def _emit_loading(self, message, percent):
@@ -226,49 +232,185 @@ class BackendThread(QThread):
         # ═══════════ Phase: loading — 启动相机 ═══════════
         self._emit_loading('正在启动相机...', 5)
 
-        from pyorbbecsdk import Pipeline, Config, OBSensorType, OBFormat, AlignFilter, OBStreamType
+        from game_frontend.camera_provider import (
+            create_camera_provider, WebcamCameraProvider,
+            CameraUnavailableError,
+        )
+
+        provider = None
+        fallback_reason = None
+        error_message = None
 
         try:
-            pipeline = Pipeline()
-            config = Config()
-            color_profiles = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
-            depth_profiles = pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
-            config.enable_stream(color_profiles.get_default_video_stream_profile())
-            config.enable_stream(depth_profiles.get_default_video_stream_profile())
-            pipeline.start(config)
-            cam_w = color_profiles.get_default_video_stream_profile().get_width()
-            cam_h = color_profiles.get_default_video_stream_profile().get_height()
-            print(f"[后端] 相机已启动 ({cam_w}x{cam_h})")
-        except Exception as e:
-            print(f"[错误] 相机启动失败: {e}")
-            self._emit_loading(f'相机启动失败: {e}', -1)
+            provider = create_camera_provider(mode='auto')
+            provider.start()
+        except CameraUnavailableError as e:
+            # ── Orbbec 设备不可用 ──
+            error_message = str(e)
+            print(f"[后端] Orbbec 不可用: {error_message}")
+
+            if provider is not None and provider.mode == 'orbbec':
+                # 强制 orbbec 模式 — 不降级, 直接报错
+                self._emit_loading(
+                    f'未检测到 Orbbec 3D 相机\n\n'
+                    f'{error_message}\n\n'
+                    f'当前为强制 Orbbec 模式。\n'
+                    f'可关闭程序后使用以下命令切换为普通摄像头兼容模式:\n\n'
+                    f'PowerShell:\n'
+                    f'  $env:OFFICEFIT_CAMERA="webcam"\n'
+                    f'  python run_game_frontend.py\n\n'
+                    f'或删除环境变量恢复自动模式:\n'
+                    f'  Remove-Item Env:OFFICEFIT_CAMERA',
+                    -1,
+                )
+                self.status_updated.emit({
+                    'phase': 'error',
+                    'camera_source': 'orbbec',
+                    'depth_available': False,
+                    'camera_mode_text': 'Orbbec 模式 — 设备不可用',
+                    'fallback_reason': None,
+                    'error_message': error_message,
+                })
+                return
+
+            # auto 模式 — 降级到 webcam
+            fallback_reason = (
+                f"未检测到 Orbbec 3D 相机，已切换普通摄像头兼容模式"
+            )
+            print(f"[后端] {fallback_reason}")
+
+            try:
+                provider.stop()
+            except Exception:
+                pass
+
+            try:
+                provider = WebcamCameraProvider(camera_index=0)
+                provider.mode = 'auto'
+                provider.fallback_reason = fallback_reason
+                provider.start()
+            except RuntimeError as e2:
+                error_message = (
+                    f"Orbbec 不可用, webcam 降级也失败: {e2}"
+                )
+                print(f"[错误] {error_message}")
+                self._emit_loading(error_message, -1)
+                self.status_updated.emit({
+                    'phase': 'error',
+                    'camera_source': 'none',
+                    'depth_available': False,
+                    'camera_mode_text': '无可用相机',
+                    'fallback_reason': fallback_reason,
+                    'error_message': error_message,
+                })
+                return
+        except RuntimeError as e:
+            # ── 其他启动异常 ──
+            error_message = str(e)
+            print(f"[错误] 相机启动异常: {error_message}")
+
+            if provider is not None and provider.mode == 'orbbec':
+                self._emit_loading(
+                    f'Orbbec 相机启动失败\n\n{error_message}\n\n'
+                    f'当前为强制 Orbbec 模式。\n'
+                    f'可关闭程序后使用以下命令切换:\n'
+                    f'  $env:OFFICEFIT_CAMERA="webcam"\n'
+                    f'  python run_game_frontend.py',
+                    -1,
+                )
+                self.status_updated.emit({
+                    'phase': 'error',
+                    'camera_source': 'orbbec',
+                    'depth_available': False,
+                    'camera_mode_text': 'Orbbec 启动失败',
+                    'fallback_reason': None,
+                    'error_message': error_message,
+                })
+                return
+
+            # auto 模式下也尝试降级
+            fallback_reason = (
+                f"Orbbec 启动失败: {error_message}"
+                f" → 已降级到 USB 摄像头"
+            )
+            print(f"[后端] {fallback_reason}")
+            try:
+                provider.stop()
+            except Exception:
+                pass
+            try:
+                provider = WebcamCameraProvider(camera_index=0)
+                provider.mode = 'auto'
+                provider.fallback_reason = fallback_reason
+                provider.start()
+            except RuntimeError as e2:
+                error_message = f"webcam 降级也失败: {e2}"
+                print(f"[错误] {error_message}")
+                self._emit_loading(error_message, -1)
+                self.status_updated.emit({
+                    'phase': 'error',
+                    'camera_source': 'none',
+                    'depth_available': False,
+                    'camera_mode_text': '无可用相机',
+                    'fallback_reason': fallback_reason,
+                    'error_message': error_message,
+                })
+                return
+
+        if not provider.is_opened():
+            self._emit_loading('相机启动失败: 设备未能打开', -1)
             return
 
-        align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
-        camera_param = pipeline.get_camera_param()
-        fx = camera_param.rgb_intrinsic.fx
-        fy = camera_param.rgb_intrinsic.fy
-        cx = camera_param.rgb_intrinsic.cx
-        cy = camera_param.rgb_intrinsic.cy
+        cam_status = provider.get_status()
+        camera_source = cam_status['source']
+        depth_available = cam_status['depth_available']
+        cam_w, cam_h = cam_status.get('resolution', (0, 0))
+
+        if not fallback_reason:
+            fallback_reason = cam_status.get('fallback_reason')
+
+        camera_mode_text = (
+            "Orbbec 3D 深度相机模式" if depth_available
+            else "普通摄像头兼容模式（深度功能不可用）"
+        )
+        print(
+            f"[后端] 相机已启动 (source={camera_source}, "
+            f"{cam_w}x{cam_h}, depth={depth_available})"
+        )
+        if fallback_reason:
+            print(f"[后端] 降级原因: {fallback_reason}")
+
+        # 内参
+        fx = fy = cx = cy = None
+        if depth_available and cam_status.get('intrinsics'):
+            intr = cam_status['intrinsics']
+            fx, fy, cx, cy = intr['fx'], intr['fy'], intr['cx'], intr['cy']
 
         g = _import_game_utils()
 
         # 预推帧
         self._emit_loading('正在获取画面...', 15)
-        for _ in range(10):
+        warmup_ok = False
+        for i in range(15):
             try:
-                frames = pipeline.wait_for_frames(200)
-                if frames:
-                    frames = align_filter.process(frames)
-                    if frames:
-                        fs = frames.as_frame_set()
-                        cf = fs.get_color_frame()
-                        if cf:
-                            img = g.frame_to_bgr_image(cf)
-                            if img is not None:
-                                write_frame(img)
+                packet = provider.read(timeout_ms=300)
+                if packet and packet.color_bgr is not None:
+                    write_frame(packet.color_bgr)
+                    warmup_ok = True
+                    break
             except Exception:
                 pass
+            # 防止无限等待: 最多 15 次 × 300ms = 4.5s
+        if not warmup_ok:
+            self._emit_loading(
+                '相机已连接但无法读取画面, 请检查相机是否被其他程序占用',
+                -1,
+            )
+            try:
+                provider.stop()
+            except Exception:
+                pass
+            return
 
         # ═══════════ Phase: loading — 加载 MediaPipe ═══════════
         self._emit_loading('正在加载 MediaPipe 姿态模型...', 30)
@@ -283,11 +425,27 @@ class BackendThread(QThread):
             self._emit_loading('MediaPipe 未安装', -1)
             return
 
-        mp_model = 'models/pose_landmarker_lite.task'
+        # Pose 模型路径：环境变量 > 默认 lite
+        mp_model = os.environ.get(
+            'OFFICEFIT_POSE_MODEL',
+            'models/pose_landmarker_lite.task',
+        )
         if not os.path.exists(mp_model):
             print(f"[错误] 未找到 MediaPipe 模型: {mp_model}")
-            self._emit_loading('模型文件缺失', -1)
+            print("[提示] 可设置环境变量 OFFICEFIT_POSE_MODEL 指定路径")
+            print("[提示] 可用模型: lite / full / heavy")
+            self._emit_loading(f'模型文件缺失: {mp_model}', -1)
             return
+        # 模型级别显示名
+        _pose_level = "custom"
+        if "lite" in mp_model.lower():
+            _pose_level = "lite"
+        elif "full" in mp_model.lower():
+            _pose_level = "full"
+        elif "heavy" in mp_model.lower():
+            _pose_level = "heavy"
+        print(f"[后端] Pose 模型: {mp_model} ({_pose_level})")
+        self._emit_loading(f'Pose 模型 ({_pose_level}): {os.path.basename(mp_model)}', 25)
 
         base_opt = BaseOptions(model_asset_path=mp_model)
         mp_opts = vision.PoseLandmarkerOptions(
@@ -321,33 +479,44 @@ class BackendThread(QThread):
             self._emit_loading(f'模型加载失败: {e}', -1)
             return
 
-        # ═══════════ 初始化游戏组件 ═══════════
-        self._emit_loading('正在准备游戏...', 90)
-
-        g._standing_ref = {'hip_y': None, 'spine': None, 'frames': 0}
-        g._jump_tracker = collections.deque(maxlen=12)
-
-        from game_demo_p1 import GameState
-        game = GameState(mode=self.mode)
-        game.sound_enabled = self.sound_enabled
-        action_counter = {}
+        # ═══════════ 初始化训练组件 ═══════════
+        game = None
         prev_time = time.time()
         fps_deque = collections.deque(maxlen=60)
-
-        # 多人追踪器
+        action_counter = {}
         person_tracker = PersonTracker()
-
-        # 每人独立的动作状态
         _person_states = {}
+        office_start_time = time.time()
 
-        def _get_person_state(pid):
-            if pid not in _person_states:
-                _person_states[pid] = {
-                    'standing_ref': {'hip_y': None, 'spine': None, 'frames': 0},
-                    'jump_tracker': collections.deque(maxlen=12),
-                    'action_counter': {}
-                }
-            return _person_states[pid]
+        # ── 相机断联检测计数（office / training 共用） ──
+        _frame_fail_count = 0
+
+        if self.run_mode == 'training':
+            self._emit_loading('正在准备训练...', 90)
+            g._standing_ref = {'hip_y': None, 'spine': None, 'frames': 0}
+            g._jump_tracker = collections.deque(maxlen=12)
+            from game_demo_p1 import GameState
+            game = GameState(mode=self.mode, workout_mode=self.workout_mode)
+            game.sound_enabled = self.sound_enabled
+
+            def _get_person_state(pid):
+                if pid not in _person_states:
+                    _person_states[pid] = {
+                        'standing_ref': {'hip_y': None, 'spine': None, 'frames': 0},
+                        'jump_tracker': collections.deque(maxlen=12),
+                        'action_counter': {}
+                    }
+                return _person_states[pid]
+        else:
+            self._emit_loading('进入办公观察模式...', 90)
+            def _get_person_state(pid):
+                if pid not in _person_states:
+                    _person_states[pid] = {
+                        'standing_ref': {'hip_y': None, 'spine': None, 'frames': 0},
+                        'jump_tracker': collections.deque(maxlen=12),
+                        'action_counter': {}
+                    }
+                return _person_states[pid]
 
         # ═══════════ AI 处理：多人版 ═══════════
         def run_ai_pipeline_multi(img_bgr, max_persons=3):
@@ -371,8 +540,19 @@ class BackendThread(QThread):
                 bottom = int(y2 * img_h / g.INPUT_HEIGHT)
                 boxes.append([left, top, right - left, bottom - top])
 
-            # 按面积排序，取前 N 个
-            boxes.sort(key=lambda b: b[2] * b[3], reverse=True)
+            # 过滤太小的人（忽略背景远处的人）
+            min_area = (img_w * img_h) * 0.02  # 至少占画面 2%
+            boxes = [b for b in boxes if b[2] * b[3] >= min_area]
+            # 按 (面积 × 中心权重) 排序 — 优先画面中央的大目标
+            cx, cy = img_w / 2, img_h / 2
+            def _score(b):
+                area = b[2] * b[3]
+                bx_c = b[0] + b[2] / 2
+                by_c = b[1] + b[3] / 2
+                dist = ((bx_c - cx) ** 2 + (by_c - cy) ** 2) ** 0.5
+                center_weight = max(0, 1.0 - dist / max(img_w, img_h))
+                return area * (0.6 + 0.4 * center_weight)
+            boxes.sort(key=_score, reverse=True)
             boxes = boxes[:max_persons]
 
             # 追踪分配稳定ID
@@ -428,128 +608,139 @@ class BackendThread(QThread):
                     head_x = int(sum(landmarks_2d[i][0] for i in [0, 11, 12] if landmarks_2d[i][2] > 0.5) / max(1, sum(1 for i in [0, 11, 12] if landmarks_2d[i][2] > 0.5)))
                     head_y = min(lm[1] for lm in landmarks_2d[:11] if lm[2] > 0.5)
                     action = all_actions.get(pid, '?')
-                    label = f"P{pid}: {action}"
+                    label = f"当前动作: {action}"
                     cv2.putText(result, label, (head_x - 40, head_y - 12),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
             return all_actions, all_landmarks, result
 
-        # ═══════════ Phase: waiting_for_hands ═══════════
-        print(f"[后端] 游戏就绪 难度: {self.mode.upper()}")
-        phase = 'waiting_for_hands'
-        countdown_start = 0
-        hands_window = collections.deque(maxlen=30)
-        HANDS_RATIO = 0.6
+        # ═══════════ Office 观察模式 ═══════════
+        if self.run_mode == 'office':
+            print(f"[Training] Entering office observation mode")
+            _office_frame = 0
+            _last_ai_result = None
+            _last_office_error = None  # 避免相同异常反复刷屏
+            while self._running:
+                try:
+                    packet = provider.read(timeout_ms=100)
+                    if not packet or packet.color_bgr is None:
+                        _frame_fail_count += 1
+                        if _frame_fail_count >= self.CAMERA_FAIL_THRESHOLD:
+                            self.status_updated.emit({
+                                'phase': 'camera_error',
+                                'camera_source': camera_source,
+                                'depth_available': depth_available,
+                                'camera_mode_text': camera_mode_text,
+                                'camera_error': True,
+                                'camera_error_message':
+                                    '摄像头连接中断。',
+                            })
+                            _frame_fail_count = 0
+                        continue
+                    _frame_fail_count = 0
+                    img_bgr = packet.color_bgr
 
-        # 单人等待举手用 counter
-        wait_counter = {}
+                    # 每 2 帧跑一次 AI，降低 CPU 占用
+                    _office_frame += 1
+                    if _office_frame % 2 == 0:
+                        _last_ai_result = run_ai_pipeline_multi(img_bgr, max_persons=1)
+                        _, _, result = _last_ai_result
+                    elif _last_ai_result is not None:
+                        _, _, result = _last_ai_result
+                    else:
+                        result = img_bgr.copy()
+                    write_frame(result)
 
-        # 简化的单人管线（waiting 阶段用）
-        def run_single_for_hands(img_bgr):
-            blob = g.pre_process(img_bgr)
-            outputs = ort_session.run(None, {input_name: blob})
-            predictions = np.squeeze(outputs[0])
-            img_h, img_w = img_bgr.shape[:2]
-            boxes = []
-            for det in predictions:
-                x1, y1, x2, y2, conf, cls_id = det[:6]
-                if conf < g.CONFIDENCE_THRESHOLD or int(cls_id) != 0:
+                    office_elapsed = int(time.time() - office_start_time)
+                    person_visible = bool(
+                        _last_ai_result and _last_ai_result[0]
+                    )
+                    self.status_updated.emit({
+                        'phase': 'office',
+                        'camera_source': camera_source,
+                        'depth_available': depth_available,
+                        'camera_mode_text': camera_mode_text,
+                        'fallback_reason': fallback_reason,
+                        'error_message': error_message,
+                        'fps': 0,
+                        'office_elapsed_seconds': office_elapsed,
+                        'person_present': person_visible,
+                    })
+                except Exception as e:
+                    # 仅在异常信息变化时打印一次，避免 office 循环反复刷屏
+                    msg = str(e)
+                    if msg != _last_office_error:
+                        print(f"[后端] office 循环异常: {msg}")
+                        _last_office_error = msg
                     continue
-                left = int(x1 * img_w / g.INPUT_WIDTH)
-                top = int(y1 * img_h / g.INPUT_HEIGHT)
-                right = int(x2 * img_w / g.INPUT_WIDTH)
-                bottom = int(y2 * img_h / g.INPUT_HEIGHT)
-                boxes.append([left, top, right - left, bottom - top])
+            # office 循环结束，清理
+            try:
+                provider.stop()
+                pose_landmarker.close()
+            except Exception:
+                pass
+            print("[Training] Office backend thread stopped")
+            return
 
-            action_text = "STANDING"
-            landmarks_2d = None
+        # ═══════════ Phase: countdown — 直接 3 秒倒计时 ═══════════
+        print(f"[Training] Session ready, mode: {self.mode}")
+        phase = 'countdown'
+        countdown_start = time.time()
 
-            if boxes:
-                largest = max(boxes, key=lambda b: b[2] * b[3])
-                left, top, w, h = largest
-                margin = int(0.1 * max(w, h))
-                bx, by, bw, bh = max(0, left - margin), max(0, top - margin), w + 2 * margin, h + 2 * margin
-                bw = min(bw, img_w - bx)
-                bh = min(bh, img_h - by)
-                if bw > 0 and bh > 0:
-                    roi = img_bgr[by:by + bh, bx:bx + bw]
-                    roi = cv2.resize(roi, (256, 256))
-                    roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
-                    mp_img = MPImage(image_format=ImageFormat.SRGB, data=roi_rgb)
-                    mp_result = pose_landmarker.detect_for_video(mp_img, int(time.time() * 1000))
-                    if mp_result.pose_landmarks and len(mp_result.pose_landmarks) > 0:
-                        landmarks_2d = []
-                        for lm in mp_result.pose_landmarks[0]:
-                            gx = int(lm.x * bw) + bx
-                            gy = int(lm.y * bh) + by
-                            vis = lm.visibility if lm.visibility else (lm.presence if lm.presence else 1.0)
-                            landmarks_2d.append((gx, gy, vis))
-
-            if landmarks_2d:
-                action_text, _ = g.recognize_action(landmarks_2d, wait_counter)
-
-            result = img_bgr.copy()
-            if landmarks_2d:
-                draw_skeleton_multi(result, landmarks_2d, 0)
-
-            return action_text, result
+        # ── 相机断联检测（阈值使用类常量 CAMERA_FAIL_THRESHOLD） ──
+        _frame_fail_count = 0
 
         while self._running:
             try:
-                frames = pipeline.wait_for_frames(100)
-                if not frames:
+                packet = provider.read(timeout_ms=100)
+                if not packet or packet.color_bgr is None:
+                    _frame_fail_count += 1
+                    if _frame_fail_count >= self.CAMERA_FAIL_THRESHOLD:
+                        self.status_updated.emit({
+                            'phase': 'camera_error',
+                            'camera_source': camera_source,
+                            'depth_available': depth_available,
+                            'camera_mode_text': camera_mode_text,
+                            'camera_error': True,
+                            'camera_error_message':
+                                '摄像头连接中断。\n'
+                                '请检查连接后按 ESC 返回主菜单再重新进入；\n'
+                                '或关闭程序后重新启动。\n'
+                                '如需临时使用普通摄像头:\n'
+                                '$env:OFFICEFIT_CAMERA="webcam"\n'
+                                'python run_game_frontend.py',
+                            'error_message':
+                                f'连续 {_frame_fail_count} 帧读取失败',
+                        })
+                        _frame_fail_count = 0  # 重置以避免重复弹
                     continue
-                frames = align_filter.process(frames)
-                if not frames:
-                    continue
-                frames = frames.as_frame_set()
+                _frame_fail_count = 0
 
-                color_frame = frames.get_color_frame()
-                depth_frame = frames.get_depth_frame()
-                if not color_frame or not depth_frame:
-                    continue
+                img_bgr = packet.color_bgr
 
-                img_bgr = g.frame_to_bgr_image(color_frame)
-                if img_bgr is None:
-                    continue
-
-                if phase in ('waiting_for_hands', 'countdown'):
-                    action_text, result = run_single_for_hands(img_bgr)
-                    hands_up = (action_text == 'RAISING_BOTH_HANDS')
-                    hands_window.append(hands_up)
-                    wr = sum(hands_window) / len(hands_window) if hands_window else 0
-
-                    write_frame(result)
-
-                    if phase == 'waiting_for_hands':
-                        if wr >= HANDS_RATIO and len(hands_window) >= 5:
-                            phase = 'countdown'
-                            countdown_start = time.time()
-                            print(f"[后端] 检测到举手 (比例={wr:.0%})，开始倒计时")
-                        else:
-                            self.status_updated.emit({
-                                'phase': 'waiting_for_hands',
-                                'mode': self.mode,
-                            })
-                            continue
-
-                    if phase == 'countdown':
-                        elapsed = time.time() - countdown_start
-                        cd_remain = max(0, 3 - int(elapsed))
-                        if cd_remain > 0:
-                            self.status_updated.emit({
-                                'phase': 'countdown',
-                                'countdown': cd_remain,
-                                'mode': self.mode,
-                            })
-                            continue
-                        else:
-                            phase = 'playing'
-                            prev_time = time.time()
-                            fps_deque.clear()
-                            action_counter = {}
-                            print("[后端] 倒计时结束，游戏开始!")
-                            continue
+                if phase == 'countdown':
+                    write_frame(img_bgr)
+                    elapsed = time.time() - countdown_start
+                    cd_remain = max(0, 3 - int(elapsed))
+                    if cd_remain > 0:
+                        self.status_updated.emit({
+                            'phase': 'countdown',
+                            'countdown': cd_remain,
+                            'mode': self.mode,
+                            'camera_source': camera_source,
+                            'depth_available': depth_available,
+                            'camera_mode_text': camera_mode_text,
+                            'fallback_reason': fallback_reason,
+                            'error_message': error_message,
+                        })
+                        continue
+                    else:
+                        phase = 'playing'
+                        prev_time = time.time()
+                        fps_deque.clear()
+                        action_counter = {}
+                        print("[Training] Starting relaxation session")
+                        continue
 
                 # ═══════════ Phase: playing ═══════════
                 curr_time = time.time()
@@ -583,12 +774,18 @@ class BackendThread(QThread):
                     'combo': game.combo,
                     'time_left': game.time_left,
                     'mode': game.mode,
+                    'workout_mode': self.workout_mode,
                     'action_text': action_text,
                     'prompt_text': game.display_text,
                     'prompt_color': game.prompt_color,
                     'prompt_type': game.prompt_type,
                     'game_over': game.game_over,
                     'high_score': game.high_score,
+                    'camera_source': camera_source,
+                    'depth_available': depth_available,
+                    'camera_mode_text': camera_mode_text,
+                    'fallback_reason': fallback_reason,
+                    'error_message': error_message,
                 }
 
                 self.status_updated.emit(status)
@@ -601,11 +798,11 @@ class BackendThread(QThread):
 
         # ---- 清理 ----
         try:
-            pipeline.stop()
+            provider.stop()
             pose_landmarker.close()
         except Exception:
             pass
-        print("[后端] 线程已退出")
+        print("[Training] Backend thread stopped")
 
     def stop(self):
         self._running = False

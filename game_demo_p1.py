@@ -15,10 +15,10 @@
 # ******************************************************************************
 #
 # ============================================================================
-# 动作模仿挑战游戏 — Game Demo P1 (单人模式)
+# OfficeFit 放松训练 — Standalone (单人模式)
 # ============================================================================
-# 系统随机出题（绿色=正向 红色=反向），用户做出对应动作，做对得分。
-# 支持三种难度（练习/普通/困难），30s倒计时，计分板，音效反馈。
+# 系统随机出题（绿色=正向 红色=反向），用户做出对应动作，完成得分。
+# 支持三种模式（轻松/标准/活力），30s 倒计时，完成度记录，音效反馈。
 #
 # 前置条件：
 #   - pip install mediapipe opencv-python numpy onnxruntime pyorbbecsdk
@@ -94,12 +94,16 @@ BLACK, RED, WHITE, GREEN = (0, 0, 0), (0, 0, 255), (255, 255, 255), (0, 255, 0)
 YELLOW, CYAN, MAGENTA = (0, 255, 255), (255, 255, 0), (255, 0, 255)
 ORANGE = (0, 165, 255)
 
-# ========== [2] 游戏参数 ==========
-GAME_ROUND_SECONDS = 30                  # 每轮时长
+# ========== [2] 放松训练参数 ==========
+GAME_ROUND_SECONDS = 30                  # 每轮时长（秒）
+# 节奏映射:
+#   轻松(practice): 最慢节奏，适合办公室/低帧率环境
+#   标准(normal):   原轻松模式节奏，推荐日常使用
+#   活力(hard):     原标准模式节奏，适合状态较好时
 DIFFICULTY_CONFIG = {
-    'practice': {'interval': 5.0,  'reverse_prob': 0.2},
-    'normal':   {'interval': 3.0,  'reverse_prob': 0.4},
-    'hard':     {'interval': 2.0,  'reverse_prob': 0.5},
+    'practice': {'interval': 7.0,  'reverse_prob': 0.10, 'correct_needed': 1},
+    'normal':   {'interval': 5.0,  'reverse_prob': 0.20, 'correct_needed': 2},
+    'hard':     {'interval': 3.0,  'reverse_prob': 0.40, 'correct_needed': 2},
 }
 SCORE_FORWARD = 10
 SCORE_REVERSE = 20
@@ -116,21 +120,51 @@ LEADERBOARD_FILE = 'game_leaderboard.json'
 # ========== [3] 动作映射表 ==========
 # 正向: 指令名 → (显示名, 期望动作标签)
 FORWARD_MAP = {
-    'BOTH_HANDS': ('举起双手!', 'RAISING_BOTH_HANDS'),
-    'LEFT_HAND':  ('举起左手!', 'RAISING_LEFT_HAND'),
-    'RIGHT_HAND': ('举起右手!', 'RAISING_RIGHT_HAND'),
-    'SQUAT':      ('蹲下!',     'SQUATTING'),
-    'LEFT_LEG':   ('抬起左腿!',  'RAISING_LEFT_LEG'),
-    'RIGHT_LEG':  ('抬起右腿!',  'RAISING_RIGHT_LEG'),
+    # 上半身动作
+    'BOTH_HANDS':   ('双手上举',     'RAISING_BOTH_HANDS'),
+    'LEFT_HAND':    ('左手上举',     'RAISING_LEFT_HAND'),
+    'RIGHT_HAND':   ('右手上举',     'RAISING_RIGHT_HAND'),
+    'CHEST_OPEN':   ('扩胸打开',     'CHEST_OPEN'),
+    'LEFT_STRETCH': ('左侧拉伸(举右手)','RAISING_RIGHT_HAND'),
+    'RIGHT_STRETCH':('右侧拉伸(举左手)','RAISING_LEFT_HAND'),
+    'NECK_LEFT':    ('颈部左转(提示)','NECK_LEFT'),
+    'NECK_RIGHT':   ('颈部右转(提示)','NECK_RIGHT'),
+    # 全身动作
+    'SQUAT':        ('蹲下',         'SQUATTING'),
+    'LEFT_LEG':     ('左抬腿',       'RAISING_LEFT_LEG'),
+    'RIGHT_LEG':    ('右抬腿',       'RAISING_RIGHT_LEG'),
 }
 
 # 反向: 指令名 → (显示名, 期望动作标签)
 REVERSE_MAP = {
-    'LEFT_HAND':  ('反向:举起左手!', 'RAISING_RIGHT_HAND'),
-    'RIGHT_HAND': ('反向:举起右手!', 'RAISING_LEFT_HAND'),
-    'LEFT_LEG':   ('反向:抬起左腿!', 'RAISING_RIGHT_LEG'),
-    'RIGHT_LEG':  ('反向:抬起右腿!', 'RAISING_LEFT_LEG'),
-    'STAND':      ('反向:站立!',     'SQUATTING'),
+    # 上半身反向
+    'LEFT_HAND':    ('[反向] 左手上举 → 请举右手',
+                     'RAISING_RIGHT_HAND'),
+    'RIGHT_HAND':   ('[反向] 右手上举 → 请举左手',
+                     'RAISING_LEFT_HAND'),
+    'LEFT_STRETCH': ('[反向] 左侧拉伸 → 请做右侧拉伸',
+                     'RAISING_LEFT_HAND'),
+    'RIGHT_STRETCH':('[反向] 右侧拉伸 → 请做左侧拉伸',
+                     'RAISING_RIGHT_HAND'),
+    'CHEST_OPEN':   ('[反向] 扩胸打开 → 请双手合拢',
+                     'CHEST_CLOSE'),
+    # 全身反向
+    'LEFT_LEG':     ('[反向] 左抬腿 → 请做右抬腿',
+                     'RAISING_RIGHT_LEG'),
+    'RIGHT_LEG':    ('[反向] 右抬腿 → 请做左抬腿',
+                     'RAISING_LEFT_LEG'),
+    'STAND':        ('[反向] 请蹲下', 'SQUATTING'),
+}
+
+# 上半身模式：正向动作池
+UPPER_BODY_FORWARD = {
+    'BOTH_HANDS', 'LEFT_HAND', 'RIGHT_HAND',
+    'CHEST_OPEN', 'LEFT_STRETCH', 'RIGHT_STRETCH',
+}
+# 上半身模式：反向动作池（排除无明确反向的 BOTH_HANDS）
+UPPER_BODY_REVERSE = {
+    'LEFT_HAND', 'RIGHT_HAND',
+    'LEFT_STRETCH', 'RIGHT_STRETCH', 'CHEST_OPEN',
 }
 
 GREEN_FOR_FORWARD = (0, 220, 50)
@@ -266,23 +300,45 @@ def recognize_action(landmarks_2d, action_counter):
     lk = landmarks_2d[25]; rk = landmarks_2d[26]
     la = landmarks_2d[27]; ra = landmarks_2d[28]
 
-    if ls[2] < 0.5 or rs[2] < 0.5 or lw[2] < 0.5 or rw[2] < 0.5:
+    # 上半身模式：肩部核心检查，髋/膝/踝可选
+    if ls[2] < 0.5 or rs[2] < 0.5:
         return "STANDING", action_counter
 
     shoulder_center_y = (ls[1] + rs[1]) / 2
-    hip_center_y = (lh[1] + rh[1]) / 2
-    spine_2d = abs(hip_center_y - shoulder_center_y)
-    adaptive_thr = spine_2d * 0.15
+    # 髋部可见性（下半身动作的前置条件）
+    hip_visible = (lh[2] > 0.5 and rh[2] > 0.5)
+    knee_visible = (lk[2] > 0.5 and rk[2] > 0.5)
+    # 脊柱长度：有髋用髋，无髋用肩宽估算
+    if hip_visible:
+        hip_center_y = (lh[1] + rh[1]) / 2
+        spine_2d = abs(hip_center_y - shoulder_center_y)
+    else:
+        hip_center_y = shoulder_center_y  # 回退值，仅防 NameError
+        spine_2d = abs(ls[0] - rs[0]) * 1.8  # 肩宽→脊柱估算
+    adaptive_thr = max(spine_2d * 0.12, 18)  # 最低 18px 阈值
 
-    # [1] 举手
-    lw_diff = ls[1] - lw[1]; rw_diff = rs[1] - rw[1]
-    le_diff = ls[1] - le[1]; re_diff = rs[1] - re[1]
-    left_raised = (lw_diff > 24 or lw_diff > adaptive_thr or
-                   le_diff > 24 or le_diff > adaptive_thr)
-    right_raised = (rw_diff > 24 or rw_diff > adaptive_thr or
-                    re_diff > 24 or re_diff > adaptive_thr)
+    shoulder_dist = abs(ls[0] - rs[0])
+
+    # [1] 举手 — 手腕优先，肘部兜底
+    lw_diff = ls[1] - lw[1] if lw[2] > 0.5 else 0
+    rw_diff = rs[1] - rw[1] if rw[2] > 0.5 else 0
+    le_diff = ls[1] - le[1] if le[2] > 0.5 else 0
+    re_diff = rs[1] - re[1] if re[2] > 0.5 else 0
+
+    left_raised = (lw_diff > adaptive_thr * 0.8 or
+                   le_diff > adaptive_thr * 0.8)
+    right_raised = (rw_diff > adaptive_thr * 0.8 or
+                    re_diff > adaptive_thr * 0.8)
+
     if left_raised and right_raised:
-        detected_action = "RAISING_BOTH_HANDS"
+        # 扩胸：手腕/肘部距 > 肩宽 * 1.4
+        wrist_dist = (abs(lw[0] - rw[0]) if lw[2] > 0.5 and rw[2] > 0.5
+                      else abs(le[0] - re[0]) if le[2] > 0.5 and re[2] > 0.5
+                      else 0)
+        if shoulder_dist > 0 and wrist_dist > shoulder_dist * 1.4:
+            detected_action = "CHEST_OPEN"
+        else:
+            detected_action = "RAISING_BOTH_HANDS"
     elif left_raised:
         detected_action = "RAISING_LEFT_HAND"
     elif right_raised:
@@ -290,8 +346,22 @@ def recognize_action(landmarks_2d, action_counter):
     else:
         detected_action = "STANDING"
 
-    # [2] 跳跃
+    # 颈部转动检测（粗略：鼻子相对肩中心偏移）
     if detected_action == "STANDING":
+        nose = landmarks_2d[0]
+        if nose[2] > 0.5 and shoulder_dist > 0:
+            nose_offset = (nose[0] - (ls[0] + rs[0]) / 2) / shoulder_dist
+            if nose_offset > 0.35:
+                detected_action = "NECK_RIGHT"
+            elif nose_offset < -0.35:
+                detected_action = "NECK_LEFT"
+
+    # CHEST_CLOSE: 双手合拢（反向扩胸）
+    if detected_action == "CHEST_CLOSE":
+        pass
+
+    # [2] 跳跃 — 需要髋部可见
+    if detected_action == "STANDING" and hip_visible:
         _jump_tracker.append((shoulder_center_y, hip_center_y))
         if len(_jump_tracker) >= 8:
             sh_vals = [s for s, _ in _jump_tracker]
@@ -313,15 +383,12 @@ def recognize_action(landmarks_2d, action_counter):
                 detected_action = "JUMPING"
                 _jump_tracker.clear()
 
-    # [3] 抬腿
-    if detected_action == "STANDING":
+    # [3] 抬腿 — 需要髋+膝可见
+    if detected_action == "STANDING" and hip_visible and knee_visible:
         raise_thr = spine_2d * LEG_RAISE_KNEE_UP_RATIO
         level_thr = spine_2d * LEG_RAISE_LEVEL_RATIO
-        left_diff = 0.0; right_diff = 0.0
-        if lh[2] > 0.5 and lk[2] > 0.5:
-            left_diff = lh[1] - lk[1]
-        if rh[2] > 0.5 and rk[2] > 0.5:
-            right_diff = rh[1] - rk[1]
+        left_diff = lh[1] - lk[1] if lh[2] > 0.5 and lk[2] > 0.5 else 0.0
+        right_diff = rh[1] - rk[1] if rh[2] > 0.5 and rk[2] > 0.5 else 0.0
         left_leg = (left_diff > raise_thr) or (abs(left_diff) < level_thr and lh[2] > 0.5 and lk[2] > 0.5)
         right_leg = (right_diff > raise_thr) or (abs(right_diff) < level_thr and rh[2] > 0.5 and rk[2] > 0.5)
         if left_leg and right_leg:
@@ -341,8 +408,8 @@ def recognize_action(landmarks_2d, action_counter):
             if spine_2d < BEND_SPINE_THRESHOLD * 480 or shoulder_tilt > BEND_TILT_THRESHOLD * 480:
                 detected_action = "BENDING"
 
-    # [5] 蹲下
-    if detected_action == "STANDING" and lh[2] > 0.5 and rh[2] > 0.5:
+    # [5] 蹲下 — 需要髋部可见
+    if detected_action == "STANDING" and hip_visible:
         if _standing_ref['hip_y'] is None:
             _standing_ref['hip_y'] = hip_center_y
             _standing_ref['spine'] = spine_2d
@@ -365,7 +432,13 @@ def recognize_action(landmarks_2d, action_counter):
             action_counter[k] = 0
     best_action = max(action_counter, key=action_counter.get)
     best_count = action_counter[best_action]
-    if best_count >= ACTION_CONFIRM_FRAMES:
+    # 上半身动作 2 帧确认；下半身 4 帧
+    if best_action in ('RAISING_LEFT_LEG', 'RAISING_RIGHT_LEG',
+                       'SQUATTING', 'JUMPING'):
+        need = 4
+    else:
+        need = 2
+    if best_count >= need:
         return best_action, action_counter
     else:
         return "STANDING", action_counter
@@ -373,8 +446,9 @@ def recognize_action(landmarks_2d, action_counter):
 
 # ========== [9] 游戏状态管理 ==========
 class GameState:
-    def __init__(self, mode='practice'):
+    def __init__(self, mode='practice', workout_mode='full_body'):
         self.mode = mode
+        self.workout_mode = workout_mode  # 'upper_body' | 'full_body'
         cfg = DIFFICULTY_CONFIG[mode]
         self.prompt_interval = cfg['interval']
         self.reverse_prob = cfg['reverse_prob']
@@ -395,7 +469,7 @@ class GameState:
 
         # 动作确认防抖: 用户保持正确动作N帧才算完成
         self._correct_frames = 0
-        self._correct_needed = 2      # 需保持约0.07s (30fps)
+        self._correct_needed = cfg.get('correct_needed', 2)
         self._last_wrong = None       # 错误动作防抖（同一错误不重复触发）
         self._saved = False           # 排行榜是否已保存
 
@@ -413,21 +487,37 @@ class GameState:
 
     def _pick_new_prompt(self):
         """随机出题，保证不与最近3次重复"""
-        # 出题池: 正向动作 + 反向专属 STAND
-        pool = list(FORWARD_MAP.keys()) + ['STAND']
+        if self.workout_mode == 'upper_body':
+            # 上半身：正向池 + 反向池
+            fwd_pool = [a for a in UPPER_BODY_FORWARD
+                       if a in FORWARD_MAP]
+            rev_pool = [a for a in UPPER_BODY_REVERSE
+                       if a in REVERSE_MAP]
+        else:
+            fwd_pool = list(FORWARD_MAP.keys())
+            rev_pool = list(REVERSE_MAP.keys())
+            # STAND 是反向专属
+            if 'STAND' not in rev_pool:
+                rev_pool.append('STAND')
+
+        is_reverse = (random.random() < self.reverse_prob
+                      and len(rev_pool) > 0)
+        if is_reverse:
+            pool = rev_pool
+        else:
+            pool = fwd_pool
+
         candidates = [a for a in pool if a not in self._last_prompts]
         if not candidates:
             candidates = pool
-
         action_name = random.choice(candidates)
-        # STAND 只为反向存在（说站立做蹲下）
-        if action_name == 'STAND':
-            is_reverse = True
-        else:
-            is_reverse = random.random() < self.reverse_prob
 
-        if is_reverse and action_name in REVERSE_MAP:
-            display, expected = REVERSE_MAP[action_name]
+        if is_reverse:
+            # STAND 特殊处理
+            if action_name == 'STAND':
+                display, expected = REVERSE_MAP['STAND']
+            else:
+                display, expected = REVERSE_MAP[action_name]
             self.prompt_type = 'reverse'
             self.prompt_color = RED_FOR_REVERSE
             self.prompt_name = action_name
@@ -474,6 +564,26 @@ class GameState:
         """检查用户动作是否匹配期望。返回 True/False"""
         if self.game_over:
             return False
+        # 颈部动作：宽容判定，非站立即算（提示型动作）
+        if self.expected_action in ('NECK_LEFT', 'NECK_RIGHT'):
+            if user_action == self.expected_action:
+                self._correct_frames += 1
+                return self._correct_frames >= 3
+            elif user_action != "STANDING":
+                # 做了任何动作都算接近
+                self._correct_frames += 1
+                return self._correct_frames >= 4
+            else:
+                self._correct_frames = 0
+                return False
+        # CHEST_CLOSE: 不是扩胸状态即算通过
+        if self.expected_action == 'CHEST_CLOSE':
+            if user_action not in ('CHEST_OPEN', 'RAISING_BOTH_HANDS'):
+                self._correct_frames += 1
+                return self._correct_frames >= 2
+            else:
+                self._correct_frames = 0
+                return False
         if user_action == "STANDING":
             self._correct_frames = 0
             return False
@@ -606,17 +716,17 @@ class Menu:
 
         if self.state == MENU_MAIN:
             items = [
-                ('开始游戏', 'start'),
+                ('开始放松', 'start'),
                 ('难度选择', 'difficulty'),
                 ('设置', 'settings'),
                 ('排行榜', 'leaderboard'),
-                ('退出游戏', 'exit'),
+                ('退出', 'exit'),
             ]
         elif self.state == MENU_DIFFICULTY:
             items = [
-                ('练习 (Practice)', 'diff_practice'),
-                ('普通 (Normal)', 'diff_normal'),
-                ('困难 (Hard)', 'diff_hard'),
+                ('轻松模式', 'diff_practice'),
+                ('标准模式', 'diff_normal'),
+                ('活力模式', 'diff_hard'),
                 ('返回', 'back'),
             ]
         elif self.state == MENU_SETTINGS:
@@ -674,7 +784,7 @@ class Menu:
         img[:] = (20, 20, 25)
 
         # 标题
-        title = '动作模仿挑战'
+        title = 'OfficeFit 放松训练'
         put_chinese_text(img, title, (iw // 2, ih // 4 - 40), 48, WHITE, anchor='mt')
 
         # 按钮
@@ -683,7 +793,9 @@ class Menu:
 
         # 底部信息
         if self.state == MENU_MAIN:
-            info = f'当前难度: {self.difficulty.upper()}  |  音效: {"ON" if self.sound_enabled else "OFF"}'
+            mode_names = {'practice': '轻松', 'normal': '标准', 'hard': '活力'}
+            display = mode_names.get(self.difficulty, self.difficulty)
+            info = f'当前模式: {display}  |  音效: {"ON" if self.sound_enabled else "OFF"}'
             put_chinese_text(img, info, (iw // 2, ih - 60), 20, (150, 150, 150), anchor='mt')
         elif self.state == MENU_LEADERBOARD:
             entries = load_leaderboard()
@@ -772,9 +884,9 @@ def draw_game_ui(img, game):
     cv2.rectangle(img, (30, bar_y), (30 + bar_w, bar_y + 12),
                  GREEN if progress > 0.3 else YELLOW if progress > 0.1 else RED, cv2.FILLED)
 
-    mode_text = f"Mode: {game.mode.upper()}"
+    mode_text = f"模式: {game.mode}"
     cv2.putText(img, mode_text, (30, bar_y - 6), FONT_FACE, 0.5, WHITE, 1, cv2.LINE_AA)
-    cv2.putText(img, "[R] Restart  [1/2/3] Difficulty",
+    cv2.putText(img, "[R] 重新开始  [Q] 结束",
                 (iw - 280, bar_y - 6), FONT_FACE, 0.4, (150, 150, 150), 1, cv2.LINE_AA)
 
 
@@ -786,13 +898,13 @@ def draw_game_over(img, game):
     cx, cy = iw // 2, ih // 2
 
     lines = [
-        ("GAME OVER", 2.0, 4, RED),
+        ("放松完成", 2.0, 4, RED),
         ("", 0, 0, WHITE),
-        (f"Final Score: {game.score}", 1.2, 3, WHITE),
-        (f"Best Score:  {game.high_score}", 0.8, 2, YELLOW),
-        (f"Difficulty: {game.mode.upper()}", 0.7, 2, (180, 180, 180)),
+        (f"完成度: {game.score}", 1.2, 3, WHITE),
+        (f"最佳完成度:  {game.high_score}", 0.8, 2, YELLOW),
+        (f"模式: {game.mode}", 0.7, 2, (180, 180, 180)),
         ("", 0, 0, WHITE),
-        ("Press R to Restart", 1.0, 3, GREEN),
+        ("按 R 重新开始", 1.0, 3, GREEN),
     ]
 
     total_h = 0
@@ -1166,9 +1278,9 @@ if __name__ == '__main__':
     prev_time = time.time()
 
     print("\n" + "=" * 50)
-    print("动作模仿挑战游戏 — Game Demo P1")
+    print("OfficeFit 放松训练 — Standalone")
     print("鼠标点击菜单按钮操作")
-    print("游戏中: ESC/Q=退出  R=重新开始  J=Open3D开关")
+    print("训练中: ESC/Q=退出  R=重新开始  J=Open3D开关")
     print("=" * 50 + "\n")
 
     cv2.namedWindow('Game: Action Challenge', cv2.WINDOW_NORMAL)
@@ -1269,13 +1381,13 @@ if __name__ == '__main__':
         # ---- 按键处理 ----
         key = cv2.waitKey(1) & 0xFF
         if key in (ESC_KEY, ord('q'), ord('Q')):
-            print("\n[信息] 返回菜单")
+            print("\n[Training] Session ended, returning to menu")
             menu.set_state(MENU_MAIN, result.shape[1], result.shape[0])
             game = None
         elif key == ord('r') or key == ord('R'):
             game.reset(game.mode)
             action_counter = {}
-            print(f"[游戏] 重新开始! 模式: {game.mode.upper()}")
+            print(f"[Training] Restart session! mode: {game.mode}")
         elif key == ord('j') or key == ord('J'):
             if not O3D_AVAILABLE:
                 print("[信息] Open3D 未安装，无法开启3D骨架")

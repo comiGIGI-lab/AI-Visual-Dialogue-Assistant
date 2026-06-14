@@ -165,7 +165,7 @@ QWidget#promptBarWidget {
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-/* ====== 游戏结束覆盖层 ====== */
+/* ====== 放松完成覆盖层 ====== */
 QWidget#gameOverOverlay {
     background: rgba(5, 5, 20, 0.92);
 }

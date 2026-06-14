@@ -1,4 +1,4 @@
-"""PySide6 游戏前端入口"""
+"""PySide6 OfficeFit 前端入口"""
 import sys
 import os
 
@@ -14,7 +14,7 @@ from game_frontend.main_window import MainWindow
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("动作模仿挑战游戏")
+    app.setApplicationName("OfficeFit AI 视觉对话放松助手")
 
     window = MainWindow()
     window.show()
