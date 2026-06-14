@@ -203,7 +203,25 @@ pip install protobuf==4.25.9
 
 ---
 
+<<<<<<< HEAD
 ## 注意事项
+=======
+## 项目进展
+
+| 阶段 | 内容 | 状态 |
+|------|------|:--:|
+| Phase 1 | 动作模仿互动游戏原型（PySide6 GUI + YOLO + MediaPipe） | ✅ 已完成 |
+| Phase 2 | 部署文件补齐 + 环境检查脚本 + README 文档 | ✅ 已完成 |
+| Phase 2.1 | UI 文案已从动作游戏适配为 OfficeFit 办公放松助手原型 | ✅ 已完成 |
+| Phase 3 | 笔记本摄像头降级兼容（`cv2.VideoCapture` fallback） | 🔜 计划中 |
+| Phase 4 | 语音对话交互（语音出题 + 语音反馈） | 🔜 计划中 |
+| Phase 5 | 久坐智能提醒 + 跟练放松模式 | 🔜 计划中 |
+| Phase 6 | 运动统计面板 + 历史记录可视化 | 🔜 计划中 |
+
+---
+
+## 命令行参数
+>>>>>>> feature/officefit-ui-adaptation
 
 - ❌ **不要**将 API key、账号密码、访问令牌提交到本仓库
 - ❌ **不要**将 Orbbec SDK 源码、固件包、驱动程序提交到本仓库
