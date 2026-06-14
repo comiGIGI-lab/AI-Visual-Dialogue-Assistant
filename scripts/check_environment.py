@@ -283,6 +283,96 @@ def check_resources():
 
 
 # ============================================================================
+# 3.5. 麦克风检查
+# ============================================================================
+
+def check_microphone():
+    print("\n" + "=" * 60)
+    print("  麦克风检查")
+    print("=" * 60)
+
+    mic_ok = False
+
+    # speech_recognition
+    ok, detail = _check_import("speech_recognition")
+    if ok:
+        _result(_ICON_PASS, "speech_recognition 已安装")
+    else:
+        _result(_ICON_WARN, "speech_recognition 未安装",
+                "语音识别不可用，可使用模拟语音按钮\n"
+                "          pip install SpeechRecognition")
+
+    # pyaudio
+    ok, detail = _check_import("pyaudio")
+    if ok:
+        _result(_ICON_PASS, "pyaudio 已安装")
+    else:
+        _result(_ICON_WARN, "pyaudio 未安装",
+                "语音识别不可用，可使用模拟语音按钮\n"
+                "          pip install pyaudio")
+
+    # 列出麦克风设备
+    try:
+        import speech_recognition as sr
+        sr_names = sr.Microphone.list_microphone_names()
+        if sr_names:
+            mic_ok = True
+            print(f"  speech_recognition 麦克风 ({len(sr_names)} 个):")
+            for i, name in enumerate(sr_names):
+                print(f"    [{i}] {name}")
+        else:
+            print("  speech_recognition 未检测到麦克风")
+    except Exception as e:
+        print(f"  speech_recognition 麦克风列表获取失败: {e}")
+
+    # PyAudio 输入设备
+    try:
+        import pyaudio
+        pa = pyaudio.PyAudio()
+        inputs = []
+        for i in range(pa.get_device_count()):
+            info = pa.get_device_info_by_index(i)
+            if info.get("maxInputChannels", 0) > 0:
+                inputs.append((i, info.get("name", "")))
+        pa.terminate()
+        if inputs:
+            mic_ok = True
+            print(f"  PyAudio 输入设备 ({len(inputs)} 个):")
+            for idx, name in inputs[:10]:
+                print(f"    [{idx}] {name}")
+        else:
+            print("  PyAudio 未检测到输入设备")
+    except Exception as e:
+        print(f"  PyAudio 设备列表获取失败: {e}")
+
+    # OFFICEFIT_MIC_INDEX 检查
+    env_idx = os.environ.get("OFFICEFIT_MIC_INDEX", "").strip()
+    if env_idx:
+        try:
+            idx = int(env_idx)
+            if 0 <= idx < len(sr_names):
+                _result(_ICON_PASS, f"OFFICEFIT_MIC_INDEX={idx} 有效",
+                        f"设备: {sr_names[idx]}")
+                mic_ok = True
+            else:
+                _result(_ICON_WARN,
+                        f"OFFICEFIT_MIC_INDEX={idx} 超出范围",
+                        f"有效编号: 0~{len(sr_names)-1}")
+        except ValueError:
+            _result(_ICON_WARN,
+                    f"OFFICEFIT_MIC_INDEX={env_idx} 不是有效数字")
+
+    if mic_ok:
+        _result(_ICON_PASS, "至少有一个麦克风输入设备可用")
+    else:
+        _result(_ICON_WARN, "未检测到麦克风输入设备",
+                "语音识别不可用，可使用模拟语音按钮\n"
+                "          设置: $env:OFFICEFIT_MIC_INDEX='编号'")
+
+    return mic_ok
+
+
+# ============================================================================
 # 4. 摄像头检查
 # ============================================================================
 
@@ -435,6 +525,7 @@ def main():
     check_python()
     check_dependencies()
     check_resources()
+    mic_ok = check_microphone()
     orbbec_ok, webcam_ok = check_camera()
 
     # 调整相机相关 FAIL → 如果 webcam 可用，Orbbec 缺失不算硬失败
@@ -448,6 +539,11 @@ def main():
     n_fail = print_summary()
 
     # 额外打印相机可用性提示
+    if not mic_ok:
+        print("  ──────────────────────────────────────────────")
+        print("  [INFO] 麦克风不可用，可使用模拟语音按钮进行演示。")
+        print()
+
     if not orbbec_ok:
         print("  ──────────────────────────────────────────────")
         if webcam_ok:

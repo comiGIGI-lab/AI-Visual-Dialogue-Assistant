@@ -77,7 +77,7 @@ python run_game_frontend.py
 
 | 按键 | 功能 |
 |------|------|
-| `F11` | 切换全屏 / 窗口 |
+| `F11` | 切换全屏 / 窗口（默认窗口模式） |
 | `R` | 游戏中重新开始 |
 | `ESC` / `Q` | 返回菜单 / 退出 |
 
@@ -124,6 +124,14 @@ $env:OFFICEFIT_CAMERA="orbbec"; python run_game_frontend.py
 | `yolo26n.onnx` | YOLOv26-nano 人体检测模型（640×640） | ~10 MB |
 | `yolo11n.onnx` | YOLOv11-nano 人体检测模型（备选） | ~10 MB |
 | `pose_landmarker_lite.task` | MediaPipe 姿态估计模型（33 关键点） | ~5.6 MB |
+| `pose_landmarker_full.task` | 可选，推荐平衡精度 | ~ |
+| `pose_landmarker_heavy.task` | 可选，高精度但更慢 | ~ |
+
+通过环境变量切换 Pose 模型：
+```powershell
+$env:OFFICEFIT_POSE_MODEL="models/pose_landmarker_full.task"
+```
+不设置时默认使用 lite 版本。可用级别：lite / full / heavy / custom。
 | `coco.names` | COCO 80 类标签文件 | <1 KB |
 
 ---
@@ -170,6 +178,92 @@ $env:OFFICEFIT_CAMERA="orbbec"; python run_game_frontend.py
 
 ---
 
+## 本地语音交互 (MVP)
+
+### 支持的关键词
+
+| 关键词 | 功能 | 回复示例 |
+|--------|------|----------|
+| 开始放松 | 启动放松训练 | 检测到人 → "好的，我们开始本次放松"；未检测到 → "请站到画面中央" |
+| 暂停 | 暂停当前训练 | "已暂停，准备好后可以说继续" |
+| 继续 | 恢复暂停的训练 | "好的，我们继续当前放松训练" |
+| 换一个动作 | 跳过当前动作 | "好的，切换到下一个动作" |
+| 结束 | 结束训练 | "本次放松结束，建议活动肩颈并喝水" |
+| 上半身 | 切换上半身模式 | "已切换为上半身放松模式" |
+| 全身 | 切换全身模式 | "已切换为全身活力模式" |
+
+### 技术实现
+
+- **语音识别**：`speech_recognition` + `pyaudio`，本地 Google Speech 引擎
+- **对话管理**：纯规则匹配，不调用云端 API
+- **UI 面板**：左侧「AI 办公守护助手」面板，含状态区、最近输入、AI 建议、推荐动作
+- **快捷输入**：面板下方「快捷输入」按钮是无麦克风环境下的备用输入，点击等价于一次语音输入
+- **降级兼容**：麦克风不可用时快捷输入始终可用
+
+### 放松模式
+
+| 模式 | 适用场景 | 动作范围 |
+|------|----------|----------|
+| **上半身放松** (默认) | 坐在桌前、webcam demo | 举手（左/右/双）、双手打开扩胸、左右侧拉伸、颈部转动（引导） |
+| **全身互动** | 站立、空间足够 | 以上 + 蹲下、抬腿（左/右）、跳跃 |
+
+在难度选择页可以切换放松类型并查看动作说明。
+
+### 动作说明
+
+点击"查看动作说明"可打开弹窗，展示每个动作的文字说明和示意图（占位）。将图片放入 `assets/exercise_guides/` 目录后，弹窗自动显示对应图片。用户可自行替换。
+
+### 工作流
+
+```
+选择放松模式 → Loading → 相机就绪
+  → 「说"开始放松"或点击模拟按钮」  ← 新增 ready_waiting 阶段
+  → 用户确认 → 举手倒计时 (3s) → 放松训练 (30s) → 完成
+```
+
+### 外部 AI 支持 (可选)
+
+| 环境变量 | 说明 |
+|----------|------|
+| `OFFICEFIT_AI_PROVIDER=none` | 默认，仅使用本地规则 |
+| `OFFICEFIT_AI_PROVIDER=openai` | 启用 OpenAI API（需设置 OPENAI_API_KEY） |
+
+启用外部 AI 后：
+- 语音识别可使用 Whisper API 提高准确率
+- 回复可使用 GPT-4o-mini 根据用户状态生成自然语言
+
+```powershell
+$env:OFFICEFIT_AI_PROVIDER="openai"
+$env:OPENAI_API_KEY="sk-..."   # 替换为你的 key
+python run_game_frontend.py
+```
+
+### Qwen / DashScope API 测试
+
+```powershell
+$env:DASHSCOPE_API_KEY="sk-你的key"
+python scripts/test_qwen_api.py
+
+# 可选: 切换模型
+$env:OFFICEFIT_QWEN_MODEL="qwen-turbo"
+```
+
+脚本仅做连通性验证，不接入主程序。支持 qwen-plus / qwen-turbo / qwen-max。
+
+> 不要将 API key 写入代码或提交到仓库。
+
+### 成本控制策略
+
+| 数据 | 策略 |
+|------|------|
+| 原始视频 | 不上传，本地处理 |
+| 原始音频 | 不上传（默认）；可选上传短音频到 Whisper API |
+| 高频反馈 | 本地规则完成 |
+| 外部 AI 失败 | 自动回退本地规则，UI 显示回退信息 |
+| AI 回复上下文 | 仅上传结构化摘要（相机模式/深度/动作/语音文本），不上传视频帧 |
+
+---
+
 ## 常见问题排查
 
 ### 1. `pyorbbecsdk` 导入失败
@@ -200,7 +294,31 @@ pip install pyorbbecsdk2
 pip install onnxruntime-directml
 ```
 
-### 5. `protobuf` 版本冲突
+### 5. 麦克风不可用
+
+1. 运行 `python scripts/check_environment.py` 查看麦克风设备列表和编号
+2. 手动指定设备编号：
+   ```powershell
+   $env:OFFICEFIT_MIC_INDEX="0"
+   python run_game_frontend.py
+   ```
+3. 如果仍不可用，使用模拟语音按钮进行演示
+
+> 默认启动只打印当前使用的麦克风，避免刷屏。
+> 如需排查麦克风设备，打印完整设备列表（speech_recognition + PyAudio）：
+>
+> ```powershell
+> $env:OFFICEFIT_VOICE_DEBUG="1"
+> python run_game_frontend.py
+> ```
+>
+> 或直接运行环境检查脚本（始终打印完整列表）：
+>
+> ```powershell
+> python scripts/check_environment.py
+> ```
+
+### 6. `protobuf` 版本冲突
 
 ```bash
 pip install protobuf==4.25.9
@@ -215,9 +333,21 @@ pip install protobuf==4.25.9
 | Phase 1 | 动作模仿互动游戏原型（PySide6 GUI + YOLO + MediaPipe） | ✅ 已完成 |
 | Phase 2 | 部署文件补齐 + 环境检查脚本 + README 文档 | ✅ 已完成 |
 | Phase 3 | 笔记本摄像头降级兼容（`cv2.VideoCapture` fallback） | ✅ 已完成 |
-| Phase 4 | 语音对话交互（语音出题 + 语音反馈） | 🔜 计划中 |
+| Phase 4 | 语音对话交互（本地语音指令 MVP + 上半身模式 + 工作流改进） | ✅ 已完成 |
 | Phase 5 | 久坐智能提醒 + 跟练放松模式 | 🔜 计划中 |
+| Phase 5.1 | 颈部转动动作（轻量引导，不计分）| ✅ 已完成 |
+| Phase 5.2 | 健康定时提醒（久坐 35min + 喝水 60min）| ✅ 已完成 |
+| Phase 5.3 | AI 意图识别 + 动作推荐模块 | ✅ 已完成 |
 | Phase 6 | 运动统计面板 + 历史记录可视化 | 🔜 计划中 |
+
+### 本地 AI 意图识别
+
+- 支持 18 种久坐症状意图标签（颈部/肩膀/上背/腰部/臀部/体态）
+- 复合症状识别（"脖子肩膀腰都酸"）
+- 黑名单过滤（手指/手腕/眼部等精细不适不映射到骨架动作）
+- 推荐动作全部限制在 MediaPipe 可检测的大肢体动作范围
+- 测试: `python scripts/test_intent_recognizer.py`
+- 云端大模型仅作为可选增强，默认本地规则可运行
 
 当前项目正处于从"互动游戏原型"向"AI 视觉对话办公放松助手"的演进阶段。
 
